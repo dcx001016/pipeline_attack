@@ -9,7 +9,7 @@ import wandb
 from attack.attack import *
 from modules.gpt_modules import GPTConfig
 from modules.tokenizer import *
-from comm.comm_utils import *
+from communication.comm_utils import *
 from utils.dist_args_utils import *
 from utils.dist_train_utils import *
 from utils.dist_test_utils import *
@@ -39,9 +39,9 @@ def main():
     add_mixed_precision_arguments(parser)
     add_attack_schema_arguments(parser)
 
-    parser.add_argument('--model-name', type=str, default='checkpoints/gpt2-xl', metavar='S',
+    parser.add_argument('--model-name', type=str, default='checkpoints/gpt2', metavar='S',
                         help='model name or path')
-    parser.add_argument('--tokenizer-name', type=str, default='gpt2-xl', metavar='S',
+    parser.add_argument('--tokenizer-name', type=str, default='gpt2', metavar='S',
                         help='tokenizer name or path')
     parser.add_argument('--task-name', type=str, default='wikitext', metavar='S',
                         help='task name')
@@ -63,11 +63,14 @@ def main():
                         type=lambda x: x.lower()=='true', default=True, metavar='S',
                         help='do evaluation or not.')
     parser.add_argument('--wandb', 
-                        type=lambda x: x.lower()=='true', default=True, metavar='S',
+                        type=lambda x: x.lower()=='true', default=False, metavar='S',
+                        help='-')
+    parser.add_argument('--write-xlsx', 
+                        type=lambda x: x.lower()=='true', default=False, metavar='S',
                         help='-')
     args = parser.parse_args()
     torch.manual_seed(args.seed)
-    # random.seed(args.seed)
+    random.seed(args.seed)
     np.random.seed(args.seed)
 
     if args.use_cuda:
@@ -81,11 +84,16 @@ def main():
     if not args.backward_attack:
         args.backward_attack_rate = 0
 
+    assert args.pipeline_virtual_gpus % args.pipeline_group_size == 0
+    args.virtual_gpus = int(args.pipeline_virtual_gpus / args.pipeline_group_size)
+    assert args.num_layers % args.virtual_gpus == 0
+    args.virtual_num_layers = int(args.num_layers / args.virtual_gpus)
+
     init_communicators(args)
 
     if args.wandb and get_pipeline_parallel_rank() == args.pipeline_group_size-1:
-        wandb.init(project=f"dist_lm_runner--{args.optimizer}--{args.task_name}--noise~N(0,1)", 
-                   name=f"forward_attack_rate:{args.forward_attack_rate}------backward_attack_rate:{args.backward_attack_rate}",
+        wandb.init(project=f"dist_lm_runner-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
+                   name=f"forward_attack_rate:{args.forward_attack_rate}--backward_attack_rate:{args.backward_attack_rate}",
                    save_code=False)
         init_wandn_config(args)
 
@@ -131,9 +139,9 @@ def main():
                 pipe.model.model[i+1].load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_{i}.pt')
                 )
-                
-            if args.backward_attack:
-                pipe.model.model[-1].register_backward_hook(attack_hook(args.backward_attack_rate))
+                if i != 0 and i % args.virtual_num_layers == 0:
+                    pipe.model.model[i+1].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
+
         elif get_pipeline_parallel_rank() == args.pipeline_group_size-1:
             _i = get_pipeline_parallel_rank() * args.num_layers
             # skip last classification layer
@@ -142,12 +150,13 @@ def main():
                 pipe.model.model[i].load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_{_i + i}.pt')
                 )
+                if i % args.virtual_num_layers == 0:
+                    pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
+
             pipe.model.model[-1].load_state_dict(
                 torch.load(f'{args.model_name}/pytorch_lm_head.pt')
             )
 
-            if args.backward_attack:
-                pipe.model.model[-1].register_backward_hook(attack_hook(args.backward_attack_rate))
         else:
             _i = get_pipeline_parallel_rank() * args.num_layers
             for i in range(len(pipe.model.model)):
@@ -155,9 +164,9 @@ def main():
                 pipe.model.model[i].load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_{_i + i}.pt')
                 )
+                if i % args.virtual_num_layers == 0:
+                    pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
 
-            if args.backward_attack:
-                pipe.model.model[-1].register_backward_hook(attack_hook(args.backward_attack_rate))
 
     if args.profiling == 'no-profiling':
         train_loop(args, pipe, device, train_data_loader, test_data_loader)

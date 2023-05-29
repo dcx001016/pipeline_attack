@@ -4,7 +4,7 @@ import torch
 from datasets import Dataset
 from datasets import load_dataset, load_from_disk
 
-from comm.comm_utils import *
+from communication.comm_utils import *
 
 
 def wikitext_detokenize(string):

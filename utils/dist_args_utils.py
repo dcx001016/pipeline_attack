@@ -1,7 +1,7 @@
 def add_device_arguments(parser):
     parser.add_argument('--use-cuda', default=True, type=lambda x: (str(x).lower() == 'true'),
                         help='if this is set to True, will use cuda to train')
-    parser.add_argument('--cuda-id', type=int, default=0, metavar='N',
+    parser.add_argument('--cuda-id', type=int, default=1, metavar='N',
                         help='cuda index, if the instance has multiple GPUs.')
     parser.add_argument('--cuda-num', type=int, default=1, metavar='N',
                         help='number of GPUs, if the instance has multiple GPUs.')
@@ -20,7 +20,9 @@ def add_torch_distributed_arguments(parser):
                         help='pipeline-group-size (default: 2)')
     parser.add_argument('--data-group-size', type=int, default=1, metavar='D',
                         help='data-group-size (default: 1)')
-    parser.add_argument('--rank', type=int, default=0, metavar='N',
+    parser.add_argument('--pipeline-virtual-gpus', type=int, default=4, metavar='D',
+                        help='pipeline-virtual-gpus (default: 4)')
+    parser.add_argument('--rank', type=int, default=1, metavar='N',
                         help='rank of the node')
     
 
@@ -46,19 +48,19 @@ def add_model_arguments(parser):
                         help='-')
     parser.add_argument('--num-layers', type=int, default=6, metavar='N',
                         help='-')
-    parser.add_argument('--num-heads', type=int, default=12, metavar='N',
+    parser.add_argument('--num-heads', type=int, default=25, metavar='N',
                         help='-')
     
 
 def add_training_hyper_parameter_arguments(parser):
     parser.add_argument('--optimizer', type=str, default="AdamW", metavar='N')
-    parser.add_argument('--batch-size', type=int, default=16, metavar='N',
-                        help='input batch size for training (default: 16)')
+    parser.add_argument('--batch-size', type=int, default=4, metavar='N',
+                        help='input batch size for training (default: 4)')
     parser.add_argument('--micro-batch-size', type=int, default=1, metavar='N',
                         help='input micro batch size for training (default: 1)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='N',
+    parser.add_argument('--lr', type=float, default=5e-5, metavar='N',
                         help='-')
-    parser.add_argument('--num-iters', type=int, default=1000, metavar='N',
+    parser.add_argument('--num-iters', type=int, default=20000, metavar='N',
                         help='-')
 
 def add_acitvation_compression_arguments(parser):

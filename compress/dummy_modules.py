@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import copy
-import cupy
+# import copy
+# import cupy
+from utils.common_utils import print_tensor
+from communication.comm_utils import get_pipeline_parallel_rank
 
 
 class NoCompression:
@@ -22,16 +24,8 @@ class NoCompression:
     def decompress(self, x):
         return x
         
-    def compress_send(self, x, i_micro_batch, comm, dst, stream, attack=False, type="forward"):
-        abs_x = x.abs()
-        mean = abs_x.mean().item()
-        max = abs_x.max().item()
-        min = abs_x.min().item()
-        median = abs_x.median().item()
-        print(type, mean, max, min, median)
-        if attack:
-            perturbation = torch.randn_like(x)
-            x += perturbation
+    def compress_send(self, x, i_micro_batch, comm, dst, stream):
+        # print_tensor(x, f"rank: {get_pipeline_parallel_rank()} batch: {i_micro_batch}")
         comm.send(x, dst=dst, stream=stream)
         
     def recv_decompress(self, i_micro_batch, comm, src, stream):

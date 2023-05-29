@@ -1,7 +1,7 @@
 import os
 import torch
 from datasets import load_dataset, load_from_disk, Dataset
-from comm.comm_utils import *
+from communication.comm_utils import *
 
 def get_cola_data_loader(args, tokenizer, data_split='train', num_workers=0):
     

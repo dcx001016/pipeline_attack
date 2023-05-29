@@ -1,4 +1,4 @@
-from comm.comm_utils import *
+from communication.comm_utils import *
 from modules.gpt_modules import gpt_loss_func
 
 from itertools import tee, islice, chain

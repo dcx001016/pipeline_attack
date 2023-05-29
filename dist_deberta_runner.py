@@ -1,6 +1,5 @@
 import argparse
 import time
-import random
 import numpy as np
 import torch
 import torch.autograd.profiler as profiler
@@ -10,12 +9,12 @@ from tasks.data_loaders.cola import get_cola_data_loader
 from tasks.data_loaders.qnli import get_qnli_data_loader
 from modules.deberta_modules import DebertaV2Config
 from modules.tokenizer import build_deberta_tokenizer as build_tokenizer
-from pipeline_parallel.dist_gpipe_pipeline_async import GpipeAsync
 from pipeline_parallel.dist_pp_utils import get_deberta_pp_module
 from utils.dist_args_utils import *
 from utils.dist_train_utils import *
 from utils.dist_test_utils import *
-from comm.comm_utils import *
+from utils.common_utils import *
+from communication.comm_utils import *
 
 def train_loop(args, pipe, device, train_data_loader, test_data_loader):
     
@@ -118,8 +117,6 @@ def main():
                 pipe.model.encoder.layer[i].load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_{i}.pt')
                 )
-            if args.backward_attack:
-                pipe.model.encoder.layer[-1].register_backward_hook(attack_hook(args.backward_attack_rate))
             if hasattr(pipe.model.encoder, 'rel_embeddings'):
                 pipe.model.encoder.rel_embeddings.load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_rel_embs.pt')
@@ -138,8 +135,6 @@ def main():
                 pipe.model.encoder.layer[i].load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_{_i+i}.pt')
                 )
-            if args.backward_attack:
-                pipe.model.encoder.layer[-1].register_backward_hook(attack_hook(args.backward_attack_rate))
             if hasattr(pipe.model.encoder, 'rel_embeddings'):
                 pipe.model.encoder.rel_embeddings.load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_rel_embs.pt')
@@ -160,8 +155,6 @@ def main():
                 pipe.model.encoder.layer[i].load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_{_i+i}.pt')
                 )
-            if args.backward_attack:
-                pipe.model.encoder.layer[-1].register_backward_hook(attack_hook(args.backward_attack_rate))
             if hasattr(pipe.model.encoder, 'rel_embeddings'):
                 pipe.model.encoder.rel_embeddings.load_state_dict(
                     torch.load(f'{args.model_name}/pytorch_rel_embs.pt')

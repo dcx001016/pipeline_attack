@@ -4,7 +4,7 @@ import torch
 from tqdm import tqdm
 from datasets import Dataset
 from datasets import load_dataset, load_from_disk
-from comm.comm_utils import *
+from communication.comm_utils import *
 
     
 def get_arxiv21_train_data_loader(args, tokenizer, num_workers=0):

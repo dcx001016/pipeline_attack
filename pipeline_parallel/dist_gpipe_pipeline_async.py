@@ -1,9 +1,7 @@
 import time
 import json
-import random
 import torch.nn.functional
-from torch import optim
-from comm.comm_utils import *
+from communication.comm_utils import *
 from modules.dist_gpt_pp_module import *
 from data_parallel.dist_dp_utils import get_dp_module
 from optimizer.optimizer import get_fp16_optimizer
@@ -88,8 +86,8 @@ class GpipeAsync:
         self.comm = get_pipeline_parallel_comm()
         self.gradient_accumulate_step = args.gradient_accumulate_step
 
-        self.forward_attack = args.forward_attack
-        self.forward_attack_rate = args.forward_attack_rate
+        # self.forward_attack = args.forward_attack
+        # self.forward_attack_rate = args.forward_attack_rate
 
         assert (args.batch_size % args.micro_batch_size == 0)
         self.micro_batch_num = args.batch_size // args.micro_batch_size
@@ -268,14 +266,14 @@ class GpipeAsync:
     def get_ts(self, event):
         return self.init_time_stamp + self.init_event.elapsed_time(event) * 1e+3
 
-    def modify_forward_stage(self, data: torch.Tensor):
-        if not self.forward_attack:
-            return data
-        p = random.random()
-        if p < (1 - self.forward_attack_rate):
-            return data
-        else:
-            return data * -1 * p
+    # def modify_forward_stage(self, data: torch.Tensor):
+    #     if not self.forward_attack:
+    #         return data
+    #     p = random.random()
+    #     if p < (1 - self.forward_attack_rate):
+    #         return data
+    #     else:
+    #         return data * -1 * p
     
     def forward_stage(self, input_data=None, aux_input_data=None):
         if aux_input_data is not None:
@@ -314,8 +312,7 @@ class GpipeAsync:
                     
                     self.forward_compressor.compress_send(
                         current_micro_output.data, i_micro_batch=i,
-                        comm=self.comm, dst=self.post_node_rank, stream=cupy_send_stream,
-                        attack=random.random()>(1-self.forward_attack_rate)
+                        comm=self.comm, dst=self.post_node_rank, stream=cupy_send_stream
                     )
                     self.profile_mark_forward_send_end(i)
             elif self.pp_rank == self.pipeline_group_size - 1:  # Only receive input from last node, do not send
@@ -368,8 +365,7 @@ class GpipeAsync:
                     
                     self.forward_compressor.compress_send(
                         current_micro_output.data, i_micro_batch=i,
-                        comm=self.comm, dst=self.post_node_rank, stream=cupy_send_stream,
-                        attack=random.random()>(1-self.forward_attack_rate)
+                        comm=self.comm, dst=self.post_node_rank, stream=cupy_send_stream
                     )
                     self.profile_mark_forward_send_end(i)
                     
@@ -432,8 +428,7 @@ class GpipeAsync:
                     
                     self.backward_compressor.compress_send(
                         self.input_micro_batches[i].grad, i_micro_batch=i,
-                        comm=self.comm, dst=self.pre_node_rank, stream=cupy_send_stream,
-                        type="backward"
+                        comm=self.comm, dst=self.pre_node_rank, stream=cupy_send_stream
                     )
                     self.profile_mark_backward_send_end(i)
             elif self.pp_rank == 0:  # only receive grad from previous node, do not send
@@ -471,8 +466,7 @@ class GpipeAsync:
                     
                     self.backward_compressor.compress_send(
                         self.input_micro_batches[i].grad, i_micro_batch=i,
-                        comm=self.comm, dst=self.pre_node_rank, stream=cupy_send_stream,
-                        type="backward"
+                        comm=self.comm, dst=self.pre_node_rank, stream=cupy_send_stream
                     )
                     self.profile_mark_backward_send_end(i)
         if self.enable_tidy_profiling:

@@ -9,12 +9,12 @@ ARGS="--model-name checkpoints/gpt2 \
 --forward-bits 4 \
 --backward-compress-method none \
 --backward-bits 8 \
---dist-url tcp://127.0.0.1:9033 \
---world-size 2 --pipeline-group-size 2 \
+--dist-url tcp://127.0.0.1:9031 \
+--world-size 2 --pipeline-group-size 2 --pipeline-virtual-gpus 6 \
 --pp-mode gpipe --profiling no-profiling --do-evaluation true \
---forward-attack false --forward-attack-rate 0.4 \
---backward-attack false --backward-attack-rate 0.3 \
---wandb false"
+--forward-attack false --forward-attack-rate 0.1 \
+--backward-attack true --backward-attack-rate 0.2 \
+--wandb true --write-xlsx true"
 
 (trap 'kill 0' SIGINT; \
 python dist_lm_runner.py $(echo ${ARGS}) --cuda-id 0 --rank 0 \
