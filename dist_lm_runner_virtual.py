@@ -16,15 +16,15 @@ from utils.dist_test_utils import *
 from utils.common_utils import *
 from tasks.data_loaders.arxiv21 import *
 from tasks.data_loaders.wikitext import *
-from pipeline_parallel.dist_pp_utils import get_pp_module
+from pipeline_parallel.dist_pp_utils import get_pp_module_virtual
 
 def train_loop(args, pipe, device, train_data_loader, test_data_loader):
     
     for e in range(args.n_epochs):
-        distributed_train_lm_iter(args, pipe, device, train_data_loader)
+        distributed_train_lm_iter_virtual(args, pipe, device, train_data_loader)
         
         if test_data_loader is not None and args.do_evaluation:
-            distributed_test_lm_iter(args, pipe, device, test_data_loader, e)
+            distributed_test_lm_iter_virtual(args, pipe, device, test_data_loader, e)
 
 def main():
     start_time = time.time()
@@ -99,7 +99,7 @@ def main():
 
     config = GPTConfig.from_pretrained(args.model_name)
 
-    config.n_layer = args.num_layers
+    config.n_layer = args.virtual_num_layers
 
     tokenizer = build_tokenizer(args)
     tokenizer.model_max_length = args.seq_length
@@ -121,76 +121,85 @@ def main():
         args.warmup_steps = len(train_data_loader)
     args.total_steps = len(train_data_loader) * args.n_epochs
 
-    use_dp = (args.world_size != args.pipeline_group_size)
-    if use_dp:
-        print("Running ", args.pp_mode, " with data parallel.")
-    else:
-        print("Running ", args.pp_mode, " without data parallel.")
+    print("Running ", args.pp_mode)
 
-    pipe = get_pp_module(args, config, device, use_dp)
+    pipe = get_pp_module_virtual(args, config, device)
 
     if args.load_pretrained_model:
-        if get_pipeline_parallel_rank() == 0:
-            pipe.model.model[0].load_state_dict(
-                torch.load(f'{args.model_name}/pytorch_embs.pt')
-            )
-            for i in range(len(pipe.model.model)-1):
-                print(i)
-                pipe.model.model[i+1].load_state_dict(
-                    torch.load(f'{args.model_name}/pytorch_{i}.pt')
+        for i in range(len(pipe.virtual_gpus)):
+            if pipe.virtual_gpus[i].virtual_rank == 0:
+                pipe.virtual_gpus[i].model.model[0].load_state_dict(
+                    torch.load(f'{args.model_name}/pytorch_embs.pt')
                 )
-                if i != 0 and i % args.virtual_num_layers == 0:
-                    pipe.model.model[i+1].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
+                for j in range(len(pipe.virtual_gpus[i].model.model) - 1):
+                    print(j)
+                    pipe.virtual_gpus[i].model.model[j + 1].load_state_dict(
+                        torch.load(f'{args.model_name}/pytorch_{j}.pt')
+                    )
+            elif pipe.virtual_gpus[i].virtual_rank == args.pipeline_virtual_gpus - 1:
+                _i = pipe.virtual_gpus[i].virtual_rank * args.virtual_num_layers
+                for j in range(len(pipe.virtual_gpus[i].model.model) - 1):
+                    print(j + _i)
+                    pipe.virtual_gpus[i].model.model[j].load_state_dict(
+                        torch.load(f'{args.model_name}/pytorch_{_i + j}.pt')
+                    )
+                # pipe.virtual_gpus[i].model.model[0].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
 
-        elif get_pipeline_parallel_rank() == args.pipeline_group_size-1:
-            _i = get_pipeline_parallel_rank() * args.num_layers
-            # skip last classification layer
-            for i in range(len(pipe.model.model)-1):
-                print(i+_i)
-                pipe.model.model[i].load_state_dict(
-                    torch.load(f'{args.model_name}/pytorch_{_i + i}.pt')
+                pipe.virtual_gpus[i].model.model[-1].load_state_dict(
+                    torch.load(f'{args.model_name}/pytorch_lm_head.pt')
                 )
-                if i % args.virtual_num_layers == 0:
-                    pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
-
-            pipe.model.model[-1].load_state_dict(
-                torch.load(f'{args.model_name}/pytorch_lm_head.pt')
-            )
-
-        else:
-            _i = get_pipeline_parallel_rank() * args.num_layers
-            for i in range(len(pipe.model.model)):
-                print(i+_i)
-                pipe.model.model[i].load_state_dict(
-                    torch.load(f'{args.model_name}/pytorch_{_i + i}.pt')
-                )
-                if i % args.virtual_num_layers == 0:
-                    pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
+            else:
+                _i = pipe.virtual_gpus[i].virtual_rank * args.virtual_num_layers
+                for j in range(len(pipe.virtual_gpus[i].model.model)):
+                    print(j + _i)
+                    pipe.virtual_gpus[i].model.model[j].load_state_dict(
+                        torch.load(f'{args.model_name}/pytorch_{_i + j}.pt')
+                    )
+                # if pipe.virtual_gpus[i].virtual_rank != 0 and pipe.virtual_gpus[i].virtual_rank % args.virtual_gpus == 0:
+                #     pipe.virtual_gpus[i].model.model[0].register_forward_pre_hook(print_activation)
+                # pipe.virtual_gpus[i].model.model[0].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
 
 
-    if args.profiling == 'no-profiling':
-        train_loop(args, pipe, device, train_data_loader, test_data_loader)
-    else:
-        prefix = './trace_json/gpt3_' + args.pp_mode
-        if use_dp:
-            prefix = prefix + '_' + args.dp_mode
-        trace_file = prefix + get_learning_arguments_str(args) + get_model_arguments_str(args) + \
-                     get_dist_arguments_str(args) + get_mixed_precision_arguments_str(args) + '_' + \
-                     args.profiling + '_' + args.trace_postfix + '.json'
-        if args.profiling == 'tidy_profiling':
-            try:
-                train_loop(args, pipe, device, train_data_loader, test_data_loader)
-            except Exception as e:
-                print(get_pipeline_parallel_rank(), e)
-            pipe.export_profiling_result(filename=trace_file)
-        elif args.profiling == 'pytorch_profiling':
-            with profiler.profile(profile_memory=True, use_cuda=args.use_cuda) as prof:
-                train_loop(args, pipe, device, train_data_loader, test_data_loader)
-            print(prof.key_averages().table())
-            prof.export_chrome_trace(trace_file)
-        else:
-            print("No recognized profiler?")
-            assert False
+    # if args.load_pretrained_model:
+    #     if get_pipeline_parallel_rank() == 0:
+    #         pipe.model.model[0].load_state_dict(
+    #             torch.load(f'{args.model_name}/pytorch_embs.pt')
+    #         )
+    #         for i in range(len(pipe.model.model)-1):
+    #             print(i)
+    #             pipe.model.model[i+1].load_state_dict(
+    #                 torch.load(f'{args.model_name}/pytorch_{i}.pt')
+    #             )
+    #             if i != 0 and i % args.virtual_num_layers == 0:
+    #                 pipe.model.model[i+1].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
+
+    #     elif get_pipeline_parallel_rank() == args.pipeline_group_size-1:
+    #         _i = get_pipeline_parallel_rank() * args.num_layers
+    #         # skip last classification layer
+    #         for i in range(len(pipe.model.model)-1):
+    #             print(i+_i)
+    #             pipe.model.model[i].load_state_dict(
+    #                 torch.load(f'{args.model_name}/pytorch_{_i + i}.pt')
+    #             )
+    #             if i % args.virtual_num_layers == 0:
+    #                 pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
+
+    #         pipe.model.model[-1].load_state_dict(
+    #             torch.load(f'{args.model_name}/pytorch_lm_head.pt')
+    #         )
+
+    #     else:
+    #         _i = get_pipeline_parallel_rank() * args.num_layers
+    #         for i in range(len(pipe.model.model)):
+    #             print(i+_i)
+    #             pipe.model.model[i].load_state_dict(
+    #                 torch.load(f'{args.model_name}/pytorch_{_i + i}.pt')
+    #             )
+    #             if i % args.virtual_num_layers == 0:
+    #                 pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
+
+    train_loop(args, pipe, device, train_data_loader, test_data_loader)
+    
     end_time = time.time()
     duration = end_time - start_time
     print(get_pipeline_parallel_rank(), 'finished.', "total time:%s" % format_time(duration))

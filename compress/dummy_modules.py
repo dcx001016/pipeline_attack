@@ -11,8 +11,12 @@ class NoCompression:
     def __init__(self, *args, **kargs):
         pass
         
-    def build_buffer(self, batch_size, micro_batch_size, seq_length, embedding_dim, device, dtype=torch.float32):
+    def build_buffer(self, batch_size, micro_batch_size, seq_length, embedding_dim, device, dtype=torch.float32, redundant=False):
         self.buffers = [
+            torch.zeros((2, micro_batch_size, seq_length, embedding_dim), 
+                        requires_grad=False, device=device, dtype=dtype,
+                       ) for _ in range(batch_size//micro_batch_size)
+        ] if redundant else [
             torch.zeros((micro_batch_size, seq_length, embedding_dim), 
                         requires_grad=False, device=device, dtype=dtype,
                        ) for _ in range(batch_size//micro_batch_size)

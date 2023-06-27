@@ -1,7 +1,7 @@
 def add_device_arguments(parser):
     parser.add_argument('--use-cuda', default=True, type=lambda x: (str(x).lower() == 'true'),
                         help='if this is set to True, will use cuda to train')
-    parser.add_argument('--cuda-id', type=int, default=1, metavar='N',
+    parser.add_argument('--cuda-id', type=int, default=0, metavar='N',
                         help='cuda index, if the instance has multiple GPUs.')
     parser.add_argument('--cuda-num', type=int, default=1, metavar='N',
                         help='number of GPUs, if the instance has multiple GPUs.')
@@ -20,8 +20,8 @@ def add_torch_distributed_arguments(parser):
                         help='pipeline-group-size (default: 2)')
     parser.add_argument('--data-group-size', type=int, default=1, metavar='D',
                         help='data-group-size (default: 1)')
-    parser.add_argument('--pipeline-virtual-gpus', type=int, default=4, metavar='D',
-                        help='pipeline-virtual-gpus (default: 4)')
+    parser.add_argument('--pipeline-virtual-gpus', type=int, default=6, metavar='D',
+                        help='pipeline-virtual-gpus (default: 6)')
     parser.add_argument('--rank', type=int, default=1, metavar='N',
                         help='rank of the node')
     
@@ -114,14 +114,16 @@ def add_parallel_schema_arguments(parser):
     
 def add_attack_schema_arguments(parser):
     parser.add_argument('--forward-attack', 
-                        type=lambda x: x.lower()=='true', default=False, metavar='S',
+                        type=lambda x: x.lower()=='true', default=True, metavar='S',
                         help='load pretrained model or not.')
     parser.add_argument('--backward-attack', 
                         type=lambda x: x.lower()=='true', default=False, metavar='S',
                         help='load pretrained model or not.')
-    parser.add_argument('--forward-attack-rate', type=float, default=0, metavar='N',
+    parser.add_argument('--forward-attack-rate', type=float, default=0.4, metavar='N',
                         help='-')
     parser.add_argument('--backward-attack-rate', type=float, default=0, metavar='N',
+                        help='-')
+    parser.add_argument('--history-length', type=int, default=10, metavar='N',
                         help='-')
     
 def get_model_arguments_str(args):

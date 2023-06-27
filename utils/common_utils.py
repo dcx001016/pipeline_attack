@@ -17,10 +17,24 @@ def format_time(seconds):
     seconds = seconds % 60
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-def init_wandn_config(args):
+def init_wandb_config(args):
     config = wandb.config
     for attr, value in vars(args).items():
         setattr(config, attr, value)
+
+def wandb_activation_gradient(activation: torch.Tensor, gradient: torch.Tensor):
+    wandb.log({
+            'activation_mean': activation.mean().item(),
+            'activation_std': activation.std().item(),
+            'activation_max': activation.max().item(),
+            'activation_min': activation.min().item(),
+            'activation_median': activation.median().item(),
+            'gradient_mean': gradient.mean().item(),
+            'gradient_std': gradient.std().item(),
+            'gradient_max': gradient.max().item(),
+            'gradient_min': gradient.min().item(),
+            'gradient_median': gradient.median().item(),
+        })
 
 def print_tensor_gradient(grad):
     print_tensor(grad, f"rank: {get_pipeline_parallel_rank()} tensor_gradient: ")

@@ -34,7 +34,7 @@ def writetoxlsx(task_name, model, epoch,
                 optimizer, pipeline_virtual_gpus,
                 perplexity, loss):
 
-    workbook = load_workbook(filename="experiment_lm_noise_virtual.xlsx")
+    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual.xlsx")
 
     sheet = workbook.active
 
@@ -50,7 +50,38 @@ def writetoxlsx(task_name, model, epoch,
     sheet["I" + row_count] = pipeline_virtual_gpus
     sheet["J" + row_count] = perplexity
     sheet["K" + row_count] = loss
-    workbook.save("experiment_lm_noise_virtual.xlsx")
+    workbook.save("experiment_lm_same_magnitude_virtual.xlsx")
+
+def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, epoch):
+    pipeline.change_mode("eval")
+    if get_pipeline_parallel_rank() == 0:
+        for i, data in enumerate(test_data_loader):
+            input_ids = data['text'].to(device)
+            current_iter_time = pipeline.infer_iter(input_ids, None, None)
+    elif get_pipeline_parallel_rank()  == args.pipeline_group_size - 1:
+        metrics = get_metric(args)
+        for i, data in enumerate(test_data_loader):
+            labels = data['text'].to(device)
+            pipeline.infer_iter(None, labels, None, 
+                                metrics=metrics, pred_func=_lm_pred_func)
+            
+        result = {
+            metric.name: metric.compute() for metric in metrics
+        }
+        print(result)
+        
+        if args.write_xlsx and epoch == args.n_epochs - 1:
+            if args.task_name in {'wikitext', 'wiki103', 'arxiv21'}:
+                writetoxlsx(args.task_name, args.model_name, args.n_epochs,
+                            args.forward_attack, args.forward_attack_rate,
+                            args.backward_attack, args.backward_attack_rate,
+                            args.optimizer, args.pipeline_virtual_gpus,
+                            result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"])
+        if args.wandb and epoch == args.n_epochs - 1:
+            wandb.config.result = result
+    else:
+        for i, data in enumerate(test_data_loader):
+            pipeline.infer_iter(None, None, None)
 
 def distributed_test_lm_iter(args, pipeline, device, test_data_loader, epoch):
     pipeline.model.eval()
@@ -77,8 +108,8 @@ def distributed_test_lm_iter(args, pipeline, device, test_data_loader, epoch):
                             args.backward_attack, args.backward_attack_rate,
                             args.optimizer, args.pipeline_virtual_gpus,
                             result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"])
-                if args.wandb:
-                    wandb.config.result = result
+        if args.wandb and epoch == args.n_epochs - 1:
+            wandb.config.result = result
     else:
         for i, data in enumerate(test_data_loader):
             pipeline.infer_iter(None, None, None)
