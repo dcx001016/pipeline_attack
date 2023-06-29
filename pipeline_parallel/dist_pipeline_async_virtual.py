@@ -246,7 +246,6 @@ class VirtualAsync:
                         **{k: v[index] for k, v in aux_input_data.items()}
                     )
                     last_input = self.input_micro_batches[index].clone()
-                    tmp_output, last_input = self.forward_attack(tmp_output, last_input)
             else:
                 if self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
                     if last_input is not None and not self.virtual_gpus[i].valid(last_input.clone(), tmp_output.clone()):
@@ -327,7 +326,7 @@ class VirtualAsync:
                     if _data.sum() != 0:
                         current_micro_output, last_input = self.virtual_forward(aux_input_data, i, input_ids_micro_batches[i], last_input)
                     else:
-                        current_micro_output, last_input = _data[1].clone(), _data[1].clone()
+                        current_micro_output, last_input = _data[0].clone(), _data[1].clone()
                     if current_micro_output.sum() == 0:
                         self.success_stage[i] = 0
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
@@ -336,7 +335,7 @@ class VirtualAsync:
                     cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
                     _data = self.forward_compressor.recv_decompress(
                         i, comm=self.comm, src=self.pre_node_rank, stream=cupy_recv_stream)
-                    self.input_micro_batches[i].data.copy_(_data)
+                    self.input_micro_batches[i].data.copy_(_data[0])
                     last_input = _data[1].clone()
                     self.torch_recv_stream.record_event(self.forward_recv_ready_events[i])
                 with torch.cuda.stream(self.torch_comp_stream):
@@ -344,7 +343,7 @@ class VirtualAsync:
                     if _data.sum() != 0:
                         current_micro_output, last_input = self.virtual_forward(aux_input_data, i, last_input=last_input)
                     else:
-                        current_micro_output, last_input = _data[1].clone(), _data[1].clone()
+                        current_micro_output, last_input = _data[0].clone(), _data[1].clone()
                     if current_micro_output.sum() == 0:
                         self.success_stage[i] = 0
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
@@ -426,7 +425,7 @@ class VirtualAsync:
 
             if self.wandb:
                 wandb.log({
-                    'loss': sum(tr_loss)/len(tr_loss),
+                    'loss': sum(tr_loss)/len(tr_loss) if len(tr_loss) else 0,
                     'lr': self.schedulers[0].get_last_lr()[0],
                 })
 

@@ -13,7 +13,7 @@ from .dist_gpipe_pipeline_async import create_optimizer
 
 
 class VirtualGPU:
-    def __init__(self, args, config, virtual_rank, device,
+    def __init__(self, args, config, virtual_rank, device, micro_batch_num,
                  _StageFirst=GPTStageFirst, _StageLast=GPTStageLast,
                  _StageMiddle=GPTStageMiddle):
         if args.fp16:
@@ -24,6 +24,9 @@ class VirtualGPU:
         self.dtype = torch.float16 if self.use_fp16 else torch.float32
         self.pipeline_virtual_gpus = args.pipeline_virtual_gpus
         self.virtual_rank = virtual_rank
+        self.micro_batch_num = micro_batch_num
+        self.redundant_virtual_rank = virtual_rank - 1 if virtual_rank else args.pipeline_virtual_gpus - 1
+        self.invalid_times = 0
 
         self.device = device
 
@@ -34,10 +37,61 @@ class VirtualGPU:
         else:
             self.model = _StageMiddle(args, config, device)
 
-        
+        self.input_micro_batches = [None] * micro_batch_num
+
+        if self.redundant_virtual_rank == 0:
+            self.redundant_model = _StageFirst(args, config, device)
+            self.redundant_cached_input_micro_batches = [None] * micro_batch_num
+            self.redundant_cached_output_micro_batches = [None] * micro_batch_num
+        elif self.redundant_virtual_rank != self.pipeline_virtual_gpus - 1:
+            self.redundant_model = _StageMiddle(args, config, device)
+            self.redundant_cached_input_micro_batches = [None] * micro_batch_num
+            self.redundant_cached_output_micro_batches = [None] * micro_batch_num
 
         if self.use_fp16:
             self.model.half()
+            self.redundant_model.half() if self.redundant_virtual_rank != self.pipeline_virtual_gpus - 1 else None
+
+    def valid(self, last_input, input, aux_input_data, index):
+        if self.redundant_virtual_rank == self.pipeline_virtual_gpus - 1 or not self.model.training:
+            return True
+            
+        self.redundant_cached_input_micro_batches[index] = last_input
+        self.redundant_cached_output_micro_batches[index] = self.redundant_model(
+            self.redundant_cached_input_micro_batches[index],
+            **{k: v[index] for k, v in aux_input_data.items()}
+        )
+
+        print(torch.dist(self.redundant_cached_output_micro_batches[index], input).item())
+        
+        if torch.equal(self.redundant_cached_output_micro_batches[index], input):
+            return True
+        self.invalid_times += 1
+        return True
+    
+    def forward(self, input, aux_input_data, index, input_ids_micro_batch=None):
+        self.input_micro_batches[index] = input
+        if self.virtual_rank == self.pipeline_virtual_gpus - 1:
+            out = self.model(
+                input, input_ids=input_ids_micro_batch,
+                **{k: v[index] for k, v in aux_input_data.items()}
+            )
+        else:
+            out = self.model(
+                input,
+                **{k: v[index] for k, v in aux_input_data.items()}
+            )
+            
+        return out
+    
+    def redundant_backward(self, index):
+        if self.redundant_virtual_rank == self.pipeline_virtual_gpus - 1:
+            return
+        
+        self.redundant_cached_output_micro_batches[index].backward(gradient=self.input_micro_batches[index].grad)
+
+    def get_invalid_times(self):
+        return self.invalid_times
 
 class BambooVirtualAsync:
     def __init__(self, args, config, device,
@@ -56,6 +110,9 @@ class BambooVirtualAsync:
         self.pp_rank = get_pipeline_parallel_rank()
         self.pre_node_rank = self.pp_rank - 1
         self.post_node_rank = self.pp_rank + 1 if self.pp_rank != self.pipeline_group_size - 1 else -1
+        # self.redundant_pp_rank = self.pp_rank - 1 if self.pp_rank else self.pipeline_group_size - 1
+        # self.redundant_pre_node_rank = self.redundant_pp_rank - 1
+        # self.redundant_post_node_rank = self.redundant_pp_rank + 1 if self.redundant_pp_rank != self.pipeline_group_size - 1 else -1
         self.comm = get_pipeline_parallel_comm()
         self.gradient_accumulate_step = args.gradient_accumulate_step
         self.pipeline_virtual_gpus = args.pipeline_virtual_gpus
@@ -69,7 +126,8 @@ class BambooVirtualAsync:
         self.vocab_size = config.vocab_size
         self.num_classes = config.num_labels
 
-        self.backward_attack_rate = args.backward_attack_rate
+        self.forward_attack_rate = args.forward_attack_rate
+        # self.backward_attack_rate = args.backward_attack_rate
 
         self.wandb = args.wandb
         self.device = device
@@ -87,6 +145,17 @@ class BambooVirtualAsync:
         self.backward_comp_ready_events = [torch.cuda.Event(enable_timing=False, blocking=False)
                                            for _ in range(self.micro_batch_num)]
         
+        # self.redundant_forward_recv_ready_events = [torch.cuda.Event(enable_timing=False, blocking=False)
+        #                                   for _ in range(self.micro_batch_num)]
+        # self.redundant_forward_comp_ready_events = [torch.cuda.Event(enable_timing=False, blocking=False)
+        #                                   for _ in range(self.micro_batch_num)]
+        
+        # self.redundant_backward_recv_ready_events = [torch.cuda.Event(enable_timing=False, blocking=False)
+        #                                    for _ in range(self.micro_batch_num)]
+        # self.redundant_backward_comp_ready_events = [torch.cuda.Event(enable_timing=False, blocking=False)
+        #                                    for _ in range(self.micro_batch_num)]
+        self.status_recv_ready_event = torch.cuda.Event(enable_timing=False, blocking=False)
+        
         self._compute_micro_batch_size()
 
         if self.pp_rank == 0:
@@ -98,6 +167,15 @@ class BambooVirtualAsync:
                            ) for _ in range(self.micro_batch_num)
             ]
 
+        # if self.redundant_pp_rank == 0:
+        #     self.redundant_input_micro_batches = None
+        # else:
+        #     self.redundant_input_micro_batches = [
+        #         torch.zeros((self.micro_batch_size, self.seq_length, self.embedding_dim),
+        #                     requires_grad=True, device=self.device, dtype=self.dtype
+        #                    ) for _ in range(self.micro_batch_num)
+        #     ]
+
         if self.pp_rank == self.pipeline_group_size - 1:
             self.output_micro_batches_grad = None
         else:
@@ -107,7 +185,17 @@ class BambooVirtualAsync:
                            ) for _ in range(self.micro_batch_num)
             ]
 
-        self.virtual_gpus = [VirtualGPU(args, config, i, device, _StageFirst, _StageLast, _StageMiddle) for i in range(args.virtual_gpus * self.pp_rank, args.virtual_gpus * (self.pp_rank + 1))]
+        # if self.redundant_pp_rank == self.pipeline_group_size - 1:
+        #     self.redundant_output_micro_batches_grad = None
+        # else:
+        #     self.redundant_output_micro_batches_grad = [
+        #         torch.zeros((self.micro_batch_size, self.seq_length, self.embedding_dim),
+        #                     requires_grad=False, device=self.device, dtype=self.dtype
+        #                    ) for _ in range(self.micro_batch_num)
+        #     ]
+
+        self.virtual_gpus = [VirtualGPU(args, config, i, device, self.micro_batch_num, _StageFirst, _StageLast, _StageMiddle) for i in range(args.virtual_gpus * self.pp_rank, args.virtual_gpus * (self.pp_rank + 1))]
+        self.model_recv_ready_event = {key:torch.cuda.Event(enable_timing=False, blocking=False) for key in self.virtual_gpus[-1].model.state_dict()}
 
         self.forward_compressor = get_compressor(
             compress_method=args.forward_compress_method, 
@@ -123,6 +211,7 @@ class BambooVirtualAsync:
             seq_length=args.seq_length,
             embedding_dim=args.embedding_dim,
             device=device, dtype=self.dtype,
+            redundant=True
         )
         
         self.backward_compressor = get_compressor(
@@ -137,19 +226,33 @@ class BambooVirtualAsync:
             seq_length=args.seq_length,
             embedding_dim=args.embedding_dim,
             device=device, dtype=self.dtype,
+            redundant=True
         )
 
         if self.use_fp16:
             tmp_optimizers = [create_optimizer(self.virtual_gpus[i].model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)]
             self.optimizers = [get_fp16_optimizer(args, tmp_optimizers[i], device) for i in range(args.virtual_gpus)]
-            self.schedulers = [get_linear_schedule_with_warmup(
-                tmp_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)]
+            self.schedulers = [get_linear_schedule_with_warmup(tmp_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)]
+            if self.pp_rank != 0:
+                redundant_tmp_optimizers = [create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)]
+                self.redundant_optimizers = [get_fp16_optimizer(args, redundant_tmp_optimizers[i], device) for i in range(args.virtual_gpus)]
+                self.redundant_schedulers = [get_linear_schedule_with_warmup(redundant_tmp_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)]
+            else:
+                redundant_tmp_optimizers = [create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(1, args.virtual_gpus)]
+                self.redundant_optimizers = [get_fp16_optimizer(args, redundant_tmp_optimizers[i], device) for i in range(args.virtual_gpus - 1)]
+                self.redundant_schedulers = [get_linear_schedule_with_warmup(redundant_tmp_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus - 1)]
         else:
             self.optimizers = [create_optimizer(self.virtual_gpus[i].model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)]
-            self.schedulers = [get_linear_schedule_with_warmup(
-                self.optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)]
+            self.schedulers = [get_linear_schedule_with_warmup(self.optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)]
+            if self.pp_rank != 0:
+                self.redundant_optimizers = [create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)]
+                self.redundant_schedulers = [get_linear_schedule_with_warmup(self.redundant_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)]
+            else:
+                self.redundant_optimizers = [create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(1, args.virtual_gpus)]
+                self.redundant_schedulers = [get_linear_schedule_with_warmup(self.redundant_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus - 1)]
 
         self.global_step = 0
+        self.get_redundant_models(args.model_name, args.virtual_num_layers)
 
     def _compute_micro_batch_size(self):
         micro_batch_float_num = self.micro_batch_size * self.seq_length * self.embedding_dim
@@ -161,42 +264,69 @@ class BambooVirtualAsync:
                   .format(micro_batch_float_num*4//1024//1024))
         print("=======Number of micro-batches: {}.".format(self.micro_batch_num))
 
+    def get_all_invalid_times(self):
+        invalid_times = 0
+        for gpu in self.virtual_gpus:
+            invalid_times += gpu.get_invalid_times()
+        return invalid_times
+
     def zero_input_grad(self):
         if self.input_micro_batches:
             for input_micro_batch in self.input_micro_batches:
                 if input_micro_batch.grad is not None:
                     input_micro_batch.grad.zero_()
 
-    def virtual_forward(self, aux_input_data, index, input_ids_micro_batch=None):
+        # if self.redundant_input_micro_batches:
+        #     for redundant_input_micro_batches in self.redundant_input_micro_batches:
+        #         if redundant_input_micro_batches.grad is not None:
+        #             redundant_input_micro_batches.grad.zero_()
+
+
+    def forward_attack(self, input: torch.Tensor, last_input: torch.Tensor):
+        p = random.random()
+        if self.virtual_gpus[0].model.training and p < self.forward_attack_rate:
+            input_perturbation = torch.normal(mean=float(input.mean()), std=float(input.std()), size=tuple(input.shape), device=input.device)
+            input.data.add_(input_perturbation)
+            last_input_perturbation = torch.normal(mean=float(last_input.mean()), std=float(last_input.std()), size=tuple(last_input.shape), device=last_input.device)
+            last_input.data.add_(last_input_perturbation)
+        return input, last_input
+
+    def virtual_forward(self, aux_input_data, index, input_ids_micro_batch=None, last_input=None):
         for i in range(len(self.virtual_gpus)):
             if i == 0:
-                if self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
-                    tmp_output = self.virtual_gpus[i].model(
-                        self.input_micro_batches[index], 
-                        **{k: v[index] for k, v in aux_input_data.items()}
-                    )
+                if self.virtual_gpus[i].virtual_rank == 0:
+                    tmp_output = self.virtual_gpus[i].forward(self.input_micro_batches[index], aux_input_data, index, input_ids_micro_batch)
+                    last_input = self.input_micro_batches[index].clone()
+                    tmp_output, last_input = self.forward_attack(tmp_output, last_input)
+                elif self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
+                    if last_input is not None and not self.virtual_gpus[i].valid(last_input.clone(), self.input_micro_batches[index].clone(), aux_input_data, index):
+                        return torch.zeros_like(self.input_micro_batches[index], device=self.device), torch.zeros_like(self.input_micro_batches[index], device=self.device)
+                    tmp_output = self.virtual_gpus[i].forward(self.input_micro_batches[index], aux_input_data, index, input_ids_micro_batch)
+                    last_input = self.input_micro_batches[index].clone()
+                    tmp_output, last_input = self.forward_attack(tmp_output, last_input)
                 else:
-                    tmp_output = self.virtual_gpus[i].model(
-                        self.input_micro_batches[index], input_ids=input_ids_micro_batch, 
-                        **{k: v[index] for k, v in aux_input_data.items()}
-                    )
+                    if last_input is not None and not self.virtual_gpus[i].valid(last_input.clone(), self.input_micro_batches[index].clone(), aux_input_data, index):
+                        return torch.zeros_like(self.input_micro_batches[index], device=self.device), torch.zeros_like(self.input_micro_batches[index], device=self.device)
+                    tmp_output = self.virtual_gpus[i].forward(self.input_micro_batches[index], aux_input_data, index, input_ids_micro_batch)
+                    last_input = self.input_micro_batches[index].clone()
             else:
                 if self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
-                    tmp_output = self.virtual_gpus[i].model(
-                        tmp_output,
-                        **{k: v[index] for k, v in aux_input_data.items()}
-                    )
+                    if not self.virtual_gpus[i].valid(last_input.clone(), tmp_output.clone(), aux_input_data, index):
+                        return torch.zeros(tmp_output.size(), device=self.device), torch.zeros(tmp_output.size(), device=self.device)
+                    last_input = tmp_output.clone()
+                    tmp_output = self.virtual_gpus[i].forward(tmp_output, aux_input_data, index, input_ids_micro_batch)
+                    tmp_output, last_input = self.forward_attack(tmp_output, last_input)
                 else:
-                    tmp_output = self.virtual_gpus[i].model(
-                        tmp_output, input_ids=input_ids_micro_batch, 
-                        **{k: v[index] for k, v in aux_input_data.items()}
-                    )
-            if self.virtual_gpus[i].model.training and self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
-                tmp_output.register_hook(attack_backward_hook(self.backward_attack_rate))
+                    if not self.virtual_gpus[i].valid(last_input.clone(), tmp_output.clone(), aux_input_data, index):
+                        return torch.zeros(tmp_output.size(), device=self.device), torch.zeros(tmp_output.size(), device=self.device)
+                    last_input = tmp_output.clone()
+                    tmp_output = self.virtual_gpus[i].forward(tmp_output, aux_input_data, index, input_ids_micro_batch)
+            # if self.virtual_gpus[i].model.training and self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
+            #     tmp_output.register_hook(attack_backward_hook(self.backward_attack_rate))
             # if self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1 and (self.virtual_gpus[i].virtual_rank + 1) % len(self.virtual_gpus) == 0:
             #     tmp_output.register_hook(print_tensor_gradient)
 
-        return tmp_output
+        return tmp_output, last_input
     
     def virtual_backward():
         pass
@@ -222,13 +352,16 @@ class BambooVirtualAsync:
         for i in range(self.micro_batch_num):
             if self.pp_rank == 0:
                 with torch.cuda.stream(self.torch_comp_stream):
-                    current_micro_output = self.virtual_forward(aux_input_data, i)
+                    current_micro_output, last_input = self.virtual_forward(aux_input_data, i)
+                    if current_micro_output.sum() == 0:
+                        self.success_stage[i] = 0
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
                 with torch.cuda.stream(self.torch_send_stream):
                     cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
                     self.torch_send_stream.wait_event(self.forward_comp_ready_events[i])
+                    send_data = torch.stack((current_micro_output.data, last_input.data), dim=0)
                     self.forward_compressor.compress_send(
-                        current_micro_output.data, i_micro_batch=i,
+                        send_data.data, i_micro_batch=i,
                         comm=self.comm, dst=self.post_node_rank, stream=cupy_send_stream
                     )
             elif self.pp_rank == self.pipeline_group_size - 1:
@@ -236,28 +369,41 @@ class BambooVirtualAsync:
                     cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
                     _data = self.forward_compressor.recv_decompress(
                         i, comm=self.comm, src=self.pre_node_rank, stream=cupy_recv_stream)
-                    self.input_micro_batches[i].data.copy_(_data)
+                    self.input_micro_batches[i].data.copy_(_data[0])
+                    last_input = _data[1].clone()
                     self.torch_recv_stream.record_event(self.forward_recv_ready_events[i])
                 with torch.cuda.stream(self.torch_comp_stream):
                     self.torch_comp_stream.wait_event(self.forward_recv_ready_events[i])
-                    current_micro_output = self.virtual_forward(aux_input_data, i, input_ids_micro_batches[i])
+                    if _data.sum() != 0:
+                        current_micro_output, last_input = self.virtual_forward(aux_input_data, i, input_ids_micro_batches[i], last_input)
+                    else:
+                        current_micro_output, last_input = _data[0].clone(), _data[1].clone()
+                    if current_micro_output.sum() == 0:
+                        self.success_stage[i] = 0
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
             else:
                 with torch.cuda.stream(self.torch_recv_stream):
                     cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
                     _data = self.forward_compressor.recv_decompress(
                         i, comm=self.comm, src=self.pre_node_rank, stream=cupy_recv_stream)
-                    self.input_micro_batches[i].data.copy_(_data)
+                    self.input_micro_batches[i].data.copy_(_data[0])
+                    last_input = _data[1].clone()
                     self.torch_recv_stream.record_event(self.forward_recv_ready_events[i])
                 with torch.cuda.stream(self.torch_comp_stream):
                     self.torch_comp_stream.wait_event(self.forward_recv_ready_events[i])
-                    current_micro_output = self.virtual_forward(aux_input_data, i)
+                    if _data.sum() != 0:
+                        current_micro_output, last_input = self.virtual_forward(aux_input_data, i, last_input=last_input)
+                    else:
+                        current_micro_output, last_input = _data[0].clone(), _data[1].clone()
+                    if current_micro_output.sum() == 0:
+                        self.success_stage[i] = 0
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
                 with torch.cuda.stream(self.torch_send_stream):
                     cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
                     self.torch_send_stream.wait_event(self.forward_comp_ready_events[i])
+                    send_data = torch.stack((current_micro_output.data, last_input.data), dim=0)
                     self.forward_compressor.compress_send(
-                        current_micro_output.data, i_micro_batch=i,
+                        send_data.data, i_micro_batch=i,
                         comm=self.comm, dst=self.post_node_rank, stream=cupy_send_stream
                     )
             output_micro_batches.append(current_micro_output)
@@ -276,11 +422,15 @@ class BambooVirtualAsync:
             tr_loss = []
 
         for i in range(self.micro_batch_num):
+            if self.success_stage[i] == 0:
+                continue
             if self.pp_rank == self.pipeline_group_size - 1:
                 with torch.cuda.stream(self.torch_comp_stream):
                     loss = loss_func(input=cached_output_micro_batches[i], target=target_as_micro_batches[i])
                     loss.backward()
                     tr_loss.append(loss.item())
+                    for gpu in self.virtual_gpus:
+                        gpu.redundant_backward(i)
                     self.torch_comp_stream.record_event(self.backward_comp_ready_events[i])
                 with torch.cuda.stream(self.torch_send_stream):
                     cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
@@ -299,6 +449,8 @@ class BambooVirtualAsync:
                 with torch.cuda.stream(self.torch_comp_stream):
                     self.torch_comp_stream.wait_event(self.backward_recv_ready_events[i])
                     cached_output_micro_batches[i].backward(gradient=self.output_micro_batches_grad[i])
+                    for gpu in self.virtual_gpus:
+                        gpu.redundant_backward(i)
                     self.torch_comp_stream.record_event(self.backward_comp_ready_events[i])
             else:
                 with torch.cuda.stream(self.torch_recv_stream):
@@ -310,6 +462,8 @@ class BambooVirtualAsync:
                 with torch.cuda.stream(self.torch_comp_stream):
                     self.torch_comp_stream.wait_event(self.backward_recv_ready_events[i])
                     cached_output_micro_batches[i].backward(gradient=self.output_micro_batches_grad[i])
+                    for gpu in self.virtual_gpus:
+                        gpu.redundant_backward(i)
                     self.torch_comp_stream.record_event(self.backward_comp_ready_events[i])
                 with torch.cuda.stream(self.torch_send_stream):
                     cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
@@ -321,19 +475,57 @@ class BambooVirtualAsync:
 
         if self.pp_rank == self.pipeline_group_size - 1:
             print({
-                'loss': sum(tr_loss)/len(tr_loss),
+                'loss': sum(tr_loss)/len(tr_loss) if len(tr_loss) else 0,
                 'lr': self.schedulers[0].get_last_lr()[0],
                 'step': self.global_step,
             })
 
             if self.wandb:
                 wandb.log({
-                    'loss': sum(tr_loss)/len(tr_loss),
+                    'loss': sum(tr_loss)/len(tr_loss) if len(tr_loss) else 0,
                     'lr': self.schedulers[0].get_last_lr()[0],
                 })
 
         return self.input_micro_batches[0].grad
     
+    def get_status(self):
+        if self.pp_rank == self.pipeline_group_size - 1:
+            with torch.cuda.stream(self.torch_send_stream):
+                cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
+                self.comm.send(self.success_stage, self.pre_node_rank, cupy_send_stream)
+        elif self.pp_rank == 0:
+            with torch.cuda.stream(self.torch_recv_stream):
+                cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
+                self.comm.recv(self.success_stage, self.post_node_rank, cupy_recv_stream)
+        else:
+            with torch.cuda.stream(self.torch_recv_stream):
+                cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
+                self.comm.recv(self.success_stage, self.post_node_rank, cupy_recv_stream)
+                self.torch_recv_stream.record_event(self.status_recv_ready_event)
+            with torch.cuda.stream(self.torch_send_stream):
+                self.torch_send_stream.wait_event(self.status_recv_ready_event)
+                cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
+                self.comm.send(self.success_stage, self.pre_node_rank, cupy_send_stream)
+
+    def get_redundant_models(self, model_name, virtual_num_layers):
+        for gpu in self.virtual_gpus:
+            if gpu.redundant_virtual_rank == self.pipeline_virtual_gpus - 1:
+                continue
+            if gpu.redundant_virtual_rank == 0:
+                gpu.redundant_model.model[0].load_state_dict(
+                    torch.load(f'{model_name}/pytorch_embs.pt')
+                )
+                for i in range(len(gpu.redundant_model.model) - 1):
+                    gpu.redundant_model.model[i + 1].load_state_dict(
+                        torch.load(f'{model_name}/pytorch_{i}.pt')
+                    )
+            else:
+                _i = gpu.redundant_virtual_rank * virtual_num_layers
+                for i in range(len(gpu.redundant_model.model)):
+                    gpu.redundant_model.model[i].load_state_dict(
+                        torch.load(f'{model_name}/pytorch_{i + _i}.pt')
+                    )
+
     def optimizer_step(self):
         for i in range(len(self.virtual_gpus)):
             torch.nn.utils.clip_grad_norm_(self.virtual_gpus[i].model.parameters(), 1.0)
@@ -341,6 +533,9 @@ class BambooVirtualAsync:
             for i in range(len(self.optimizers)):
                 self.optimizers[i].step()
                 self.schedulers[i].step()
+            for i in range(len(self.redundant_optimizers)):
+                self.redundant_optimizers[i].step()
+                self.redundant_schedulers[i].step()
 
     def sgd_iter(self, input_=None, target=None, sample_ids=None, 
                  aux_input_data=None, loss_func=torch.nn.functional.cross_entropy):
@@ -351,6 +546,7 @@ class BambooVirtualAsync:
             self.optimizers[i].zero_grad(set_to_none=False)
 
         for step in range(self.gradient_accumulate_step):
+            self.success_stage = torch.ones(self.micro_batch_num, dtype=torch.int, device=self.device)
             outputs = self.forward_stage(input_, aux_input_data=aux_input_data)
             forward_time = time.time()
             if step == 0:
@@ -383,9 +579,13 @@ class BambooVirtualAsync:
         if mode == "train":
             for i in range(len(self.virtual_gpus)):
                 self.virtual_gpus[i].model.train()
+                if hasattr(self.virtual_gpus[i], "redundant_model"):
+                    self.virtual_gpus[i].redundant_model.train()
         else:
             for i in range(len(self.virtual_gpus)):
                 self.virtual_gpus[i].model.eval()
+                if hasattr(self.virtual_gpus[i], "redundant_model"):
+                    self.virtual_gpus[i].redundant_model.train()
 
     def infer_stage(self, input_data=None, aux_input_data=None, 
                     labels=None, pred_func=None):
@@ -413,7 +613,7 @@ class BambooVirtualAsync:
         for i in range(self.micro_batch_num):
             if self.pp_rank == 0:
                 with torch.cuda.stream(self.torch_comp_stream):
-                    current_micro_output = self.virtual_forward(aux_input_data, i)
+                    current_micro_output, _ = self.virtual_forward(aux_input_data, i)
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
                 with torch.cuda.stream(self.torch_send_stream):
                     cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
@@ -426,7 +626,7 @@ class BambooVirtualAsync:
                     self.torch_recv_stream.record_event(self.forward_recv_ready_events[i])
                 with torch.cuda.stream(self.torch_comp_stream):
                     self.torch_comp_stream.wait_event(self.forward_recv_ready_events[i])
-                    current_micro_output = self.virtual_forward(aux_input_data, i)
+                    current_micro_output, _ = self.virtual_forward(aux_input_data, i)
                     current_micro_output = pred_func(current_micro_output, labels[i])
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
             else:
@@ -436,7 +636,7 @@ class BambooVirtualAsync:
                     self.torch_recv_stream.record_event(self.forward_recv_ready_events[i])
                 with torch.cuda.stream(self.torch_comp_stream):
                     self.torch_comp_stream.wait_event(self.forward_recv_ready_events[i])
-                    current_micro_output = self.virtual_forward(aux_input_data, i)
+                    current_micro_output, _ = self.virtual_forward(aux_input_data, i)
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
                 with torch.cuda.stream(self.torch_send_stream):
                     cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
