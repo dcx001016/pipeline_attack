@@ -22,7 +22,7 @@ def add_torch_distributed_arguments(parser):
                         help='data-group-size (default: 1)')
     parser.add_argument('--pipeline-virtual-gpus', type=int, default=6, metavar='D',
                         help='pipeline-virtual-gpus (default: 6)')
-    parser.add_argument('--rank', type=int, default=0, metavar='N',
+    parser.add_argument('--rank', type=int, default=1, metavar='N',
                         help='rank of the node')
     
 
@@ -60,7 +60,7 @@ def add_training_hyper_parameter_arguments(parser):
                         help='input micro batch size for training (default: 1)')
     parser.add_argument('--lr', type=float, default=5e-5, metavar='N',
                         help='-')
-    parser.add_argument('--num-iters', type=int, default=20000, metavar='N',
+    parser.add_argument('--num-iters', type=int, default=10, metavar='N',
                         help='-')
 
 def add_acitvation_compression_arguments(parser):

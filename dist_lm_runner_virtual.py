@@ -92,7 +92,7 @@ def main():
     init_communicators(args)
 
     if args.wandb and get_pipeline_parallel_rank() == args.pipeline_group_size-1:
-        wandb.init(project=f"dist_lm_runner-same_magnitude-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
+        wandb.init(project=f"dist_lm_runner-same_magnitude-defense-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
                    name=f"forward_attack_rate:{args.forward_attack_rate}--backward_attack_rate:{args.backward_attack_rate}",
                    save_code=False)
         init_wandb_config(args)
@@ -107,6 +107,11 @@ def main():
     config.bos_token_id = tokenizer.bos_token_id
     config.eos_token_id = tokenizer.eos_token_id
     config.pad_token_id = tokenizer.pad_token_id
+    config.attn_pdrop = 0
+    config.embd_pdrop = 0
+    config.resid_pdrop = 0
+    config.summary_first_dropout = 0
+    
 
     if args.task_name == 'wikitext':
         train_data_loader = get_wikitext_train_data_loader(args, tokenizer)

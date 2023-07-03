@@ -34,7 +34,7 @@ def writetoxlsx(task_name, model, epoch,
                 optimizer, pipeline_virtual_gpus,
                 perplexity, loss):
 
-    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual.xlsx")
+    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_defense.xlsx")
 
     sheet = workbook.active
 
@@ -50,7 +50,7 @@ def writetoxlsx(task_name, model, epoch,
     sheet["I" + row_count] = pipeline_virtual_gpus
     sheet["J" + row_count] = perplexity
     sheet["K" + row_count] = loss
-    workbook.save("experiment_lm_same_magnitude_virtual.xlsx")
+    workbook.save("experiment_lm_same_magnitude_virtual_defense.xlsx")
 
 def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, epoch):
     pipeline.change_mode("eval")
