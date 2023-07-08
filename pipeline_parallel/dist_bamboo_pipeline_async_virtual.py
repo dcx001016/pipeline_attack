@@ -39,7 +39,6 @@ class VirtualGPU:
         self.virtual_rank = virtual_rank
         self.micro_batch_num = micro_batch_num
         self.redundant_virtual_rank = virtual_rank - 1 if virtual_rank else args.pipeline_virtual_gpus - 1
-        self.invalid_times = 0
 
         self.device = device
 
@@ -71,7 +70,6 @@ class VirtualGPU:
         
         if torch.equal(self.redundant_cached_output_micro_batches[index], input):
             return True, self.redundant_cached_output_micro_batches[index]
-        self.invalid_times += 1
         return False, torch.zeros_like(self.redundant_cached_output_micro_batches[index])
     
     def forward(self, input, aux_input_data, index, input_ids_micro_batch=None, redundant=False):
@@ -100,9 +98,6 @@ class VirtualGPU:
             return
         
         self.redundant_cached_output_micro_batches[index].backward(gradient=self.input_micro_batches[index].grad)
-
-    def get_invalid_times(self):
-        return self.invalid_times
 
 class BambooVirtualAsync:
     def __init__(self, args, config, device,
@@ -139,6 +134,8 @@ class BambooVirtualAsync:
 
         self.forward_attack_rate = args.forward_attack_rate
         # self.backward_attack_rate = args.backward_attack_rate
+        self.invalid_times = 0
+        self.total_times = 0
 
         self.wandb = args.wandb
         self.device = device
@@ -274,11 +271,8 @@ class BambooVirtualAsync:
                   .format(micro_batch_float_num*4//1024//1024))
         print("=======Number of micro-batches: {}.".format(self.micro_batch_num))
 
-    def get_all_invalid_times(self):
-        invalid_times = 0
-        for gpu in self.virtual_gpus:
-            invalid_times += gpu.get_invalid_times()
-        return invalid_times
+    def get_invalid_rate(self):
+        return self.invalid_times / self.total_times
 
     def zero_input_grad(self):
         if self.input_micro_batches:
@@ -559,7 +553,8 @@ class BambooVirtualAsync:
                 self.redundant_schedulers[i].step()
 
     def sgd_iter(self, input_=None, target=None, sample_ids=None, 
-                 aux_input_data=None, loss_func=torch.nn.functional.cross_entropy):
+                 aux_input_data=None, loss_func=torch.nn.functional.cross_entropy,
+                 iter=0):
         self.comm.barrier()
         start_time = time.time()
         self.zero_input_grad()
@@ -577,11 +572,12 @@ class BambooVirtualAsync:
             else:
                 forward_slot = forward_time-backward_time
             # print("Rank {} node forward pass {}/{} takes {:3.2f}s"
-            #       .format(self.global_rank, step, self.gradient_accumulate_step, forward_slot))
+                #   .format(self.global_rank, step, self.gradient_accumulate_step, forward_slot))
             
             self.comm.barrier()
 
             self.get_status()
+            # print("Rank {} node get status".format(self.global_rank))
             self.comm.barrier()
 
 
@@ -592,7 +588,9 @@ class BambooVirtualAsync:
             
         optimizer_time = time.time()
         self.optimizer_step()
+        # print("Rank {} node optimizer_step".format(self.global_rank))
         torch.cuda.synchronize()
+        # print("Rank {} node synchronize".format(self.global_rank))
         self.comm.barrier()
         end_time = time.time()
         # print("Rank {} node optimizer step takes {:3.2f}s".format(self.global_rank, end_time - optimizer_time))
@@ -600,6 +598,8 @@ class BambooVirtualAsync:
         print("Rank {} node whole iteration takes {:3.2f}s".format(self.global_rank, iter_time))
         print("-------------------------------------------")
         self.global_step += 1
+        self.total_times += len(self.success_stage)
+        self.invalid_times += torch.sum(self.success_stage == 0).item()
         return iter_time, outputs[0], grad
     
     def change_mode(self, mode="train"):

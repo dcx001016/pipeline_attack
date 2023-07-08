@@ -93,7 +93,7 @@ def main():
 
     if args.wandb and get_pipeline_parallel_rank() == args.pipeline_group_size-1:
         wandb.init(project=f"dist_lm_runner-same_magnitude-defense-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
-                   name=f"forward_attack_rate:{args.forward_attack_rate}--backward_attack_rate:{args.backward_attack_rate}",
+                   name=f"forward_attack_rate:{args.forward_attack_rate}",
                    save_code=False)
         init_wandb_config(args)
 
@@ -207,8 +207,7 @@ def main():
     
     end_time = time.time()
     duration = end_time - start_time
-    print(get_pipeline_parallel_rank(), 'finished.', "total time:%s" % format_time(duration))
-    torch.cuda.empty_cache()
+    print(get_pipeline_parallel_rank(), 'finished.', "total time:%s" % format_time(duration), "invalid rate:%.2f%%" % (pipe.get_invalid_rate() * 100))
     
 
 if __name__ == '__main__':

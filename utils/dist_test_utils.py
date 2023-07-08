@@ -29,12 +29,12 @@ def _lm_pred_func(x, y):
     return loss
 
 def writetoxlsx(task_name, model, epoch, 
-                forward_attack, forward_attack_rate, 
-                backward_attack, backward_attack_rate, 
+                forward_attack, forward_attack_rate,
                 optimizer, pipeline_virtual_gpus,
-                perplexity, loss):
+                perplexity, loss,
+                invalid_rate):
 
-    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_defense.xlsx")
+    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_duplicate_copy.xlsx")
 
     sheet = workbook.active
 
@@ -44,13 +44,12 @@ def writetoxlsx(task_name, model, epoch,
     sheet["C" + row_count] = epoch
     sheet["D" + row_count] = forward_attack
     sheet["E" + row_count] = forward_attack_rate
-    sheet["F" + row_count] = backward_attack
-    sheet["G" + row_count] = backward_attack_rate
-    sheet["H" + row_count] = optimizer
-    sheet["I" + row_count] = pipeline_virtual_gpus
-    sheet["J" + row_count] = perplexity
-    sheet["K" + row_count] = loss
-    workbook.save("experiment_lm_same_magnitude_virtual_defense.xlsx")
+    sheet["F" + row_count] = optimizer
+    sheet["G" + row_count] = pipeline_virtual_gpus
+    sheet["H" + row_count] = perplexity
+    sheet["I" + row_count] = loss
+    sheet["J" + row_count] = invalid_rate
+    workbook.save("experiment_lm_same_magnitude_virtual_duplicate_copy.xlsx")
 
 def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, epoch):
     pipeline.change_mode("eval")
@@ -74,9 +73,9 @@ def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, e
             if args.task_name in {'wikitext', 'wiki103', 'arxiv21'}:
                 writetoxlsx(args.task_name, args.model_name, args.n_epochs,
                             args.forward_attack, args.forward_attack_rate,
-                            args.backward_attack, args.backward_attack_rate,
                             args.optimizer, args.pipeline_virtual_gpus,
-                            result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"])
+                            result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"],
+                            pipeline.get_invalid_rate())
         if args.wandb and epoch == args.n_epochs - 1:
             wandb.config.result = result
     else:

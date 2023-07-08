@@ -23,6 +23,7 @@ def init_wandb_config(args):
         setattr(config, attr, value)
 
 def wandb_activation_gradient(activation: torch.Tensor, gradient: torch.Tensor):
+    return
     wandb.log({
             'activation_mean': activation.mean().item(),
             'activation_std': activation.std().item(),

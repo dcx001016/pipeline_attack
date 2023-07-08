@@ -62,6 +62,8 @@ def add_training_hyper_parameter_arguments(parser):
                         help='-')
     parser.add_argument('--num-iters', type=int, default=10, metavar='N',
                         help='-')
+    parser.add_argument('--alpha', type=float, default=1.0, metavar='N',
+                        help='-')
 
 def add_acitvation_compression_arguments(parser):
     parser.add_argument('--forward-compress-method', type=str, default='none', metavar='N',
@@ -105,7 +107,7 @@ def add_mixed_precision_arguments(parser):
 
     
 def add_parallel_schema_arguments(parser):
-    parser.add_argument('--pp-mode', type=str, default='gpipe-bamboo', metavar='S',
+    parser.add_argument('--pp-mode', type=str, default='gpipe', metavar='S',
                         help='use which pipeline parallel mode: gpipe or 1f1b.')
     parser.add_argument('--dp-mode', type=str, default='allreduce', metavar='S',
                         help='use which data parallel mode: allreduce.')
@@ -119,11 +121,9 @@ def add_attack_schema_arguments(parser):
     parser.add_argument('--backward-attack', 
                         type=lambda x: x.lower()=='true', default=False, metavar='S',
                         help='load pretrained model or not.')
-    parser.add_argument('--forward-attack-rate', type=float, default=0.4, metavar='N',
+    parser.add_argument('--forward-attack-rate', type=float, default=0.1, metavar='N',
                         help='-')
     parser.add_argument('--backward-attack-rate', type=float, default=0, metavar='N',
-                        help='-')
-    parser.add_argument('--history-length', type=int, default=10, metavar='N',
                         help='-')
     
 def get_model_arguments_str(args):

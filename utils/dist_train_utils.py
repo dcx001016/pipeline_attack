@@ -18,15 +18,14 @@ def distributed_train_lm_iter_virtual(args, pipeline, device, train_data_loader)
             input_ids = data['text'].to(device)
             data_ids = (data_previous['idx'] if data_previous is not None else None, 
                         data['idx'], data_next['idx'] if data_next is not None else None, )
-            current_iter_time, _, _ = pipeline.sgd_iter(input_ids, None, data_ids)
+            current_iter_time, _, _ = pipeline.sgd_iter(input_ids, None, data_ids, iter=i)
             if i > 0:
                 total_time += current_iter_time
             if i >= args.num_iters-1:
                 break
         averaged_time = total_time / (args.num_iters - 1)
         print("Finished running ", args.num_iters,
-              " iterations, averaged (exclude the first iter) run time:", averaged_time,
-              " total invalid times:", pipeline.get_all_invalid_times())
+              " iterations, averaged (exclude the first iter) run time:", averaged_time)
     elif get_pipeline_parallel_rank()  == args.pipeline_group_size - 1:
         for i, (data_previous, data, data_next) in enumerate(previous_and_next(train_data_loader)):
             input_ids = data['text'].to(device)
@@ -34,7 +33,7 @@ def distributed_train_lm_iter_virtual(args, pipeline, device, train_data_loader)
             data_ids = (data_previous['idx'] if data_previous is not None else None, 
                         data['idx'], data_next['idx'] if data_next is not None else None, )
             _, activation, grad = pipeline.sgd_iter(input_ids, labels, data_ids, 
-                              loss_func=gpt_loss_func) # lm loss func
+                              loss_func=gpt_loss_func, iter=i) # lm loss func
             if i >= args.num_iters-1:
                 break
         if args.wandb:
@@ -43,7 +42,7 @@ def distributed_train_lm_iter_virtual(args, pipeline, device, train_data_loader)
         for i, (data_previous, data, data_next) in enumerate(previous_and_next(train_data_loader)):
             data_ids = (data_previous['idx'] if data_previous is not None else None, 
                         data['idx'], data_next['idx'] if data_next is not None else None, )
-            pipeline.sgd_iter(None, None, data_ids)
+            pipeline.sgd_iter(None, None, data_ids, iter=i)
             i += 1
             if i >= args.num_iters:
                     break
