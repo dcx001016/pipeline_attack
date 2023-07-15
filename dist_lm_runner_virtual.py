@@ -107,10 +107,11 @@ def main():
     config.bos_token_id = tokenizer.bos_token_id
     config.eos_token_id = tokenizer.eos_token_id
     config.pad_token_id = tokenizer.pad_token_id
-    config.attn_pdrop = 0
-    config.embd_pdrop = 0
-    config.resid_pdrop = 0
-    config.summary_first_dropout = 0
+    if not args.dropout:
+        config.attn_pdrop = 0
+        config.embd_pdrop = 0
+        config.resid_pdrop = 0
+        config.summary_first_dropout = 0
     
 
     if args.task_name == 'wikitext':

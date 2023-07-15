@@ -5,6 +5,7 @@ from modules.dist_gpt_pp_module import *
 from optimizer.optimizer import get_fp16_optimizer
 from compress import get_compressor
 import cupy
+import copy
 import wandb
 
 from transformers import get_linear_schedule_with_warmup
@@ -48,18 +49,26 @@ class VirtualGPU:
                 input, input_ids=input_ids_micro_batch,
                 **{k: v[index] for k, v in aux_input_data.items()}
             )
-        else:
+        elif self.virtual_rank == 0:
             out = self.model(
                 input,
                 **{k: v[index] for k, v in aux_input_data.items()}
             )
-            
+        else:
+            aux_input_data_clone = copy.deepcopy(aux_input_data)
+            if "token_type_ids" in aux_input_data_clone:
+                del aux_input_data_clone["token_type_ids"]
+            out = self.model(
+                input,
+                **{k: v[index] for k, v in aux_input_data_clone.items()}
+            )
+
         return out
 
     def valid(self, iter, index, micro_batch_num, _in):
         if not self.model.training:
             return True
-        return True
+        
         if len(self.activation) <= iter:
             self.activation.append([
                 torch.zeros((self.micro_batch_size, self.seq_length, self.embedding_dim),
@@ -124,6 +133,11 @@ class VirtualAsync:
         self.torch_recv_stream = torch.cuda.Stream(device=device, priority=-1)
         self.torch_send_stream = torch.cuda.Stream(device=device, priority=-1)
 
+        self.global_invalid = []
+        self.global_attack = []
+        self.sample_error_times = []
+        self.attack_stage_cache = torch.zeros(self.micro_batch_num, dtype=torch.int, device=self.device)
+
         self.forward_recv_ready_events = [torch.cuda.Event(enable_timing=False, blocking=False)
                                           for _ in range(self.micro_batch_num)]
         self.forward_comp_ready_events = [torch.cuda.Event(enable_timing=False, blocking=False)
@@ -134,6 +148,8 @@ class VirtualAsync:
         self.backward_comp_ready_events = [torch.cuda.Event(enable_timing=False, blocking=False)
                                            for _ in range(self.micro_batch_num)]
         self.status_recv_ready_event = torch.cuda.Event(enable_timing=False, blocking=False)
+        self.attack_recv_ready_event = torch.cuda.Event(enable_timing=False, blocking=False)
+        self.attack_comp_ready_event = torch.cuda.Event(enable_timing=False, blocking=False)
         self.activate_cache = torch.zeros((self.micro_batch_size, self.seq_length, self.embedding_dim), 
         requires_grad=False, dtype=self.dtype)
         
@@ -217,11 +233,12 @@ class VirtualAsync:
                 if input_micro_batch.grad is not None:
                     input_micro_batch.grad.zero_()
 
-    def forward_attack(self, input: torch.Tensor):
+    def forward_attack(self, input: torch.Tensor, index):
         p = random.random()
         if self.virtual_gpus[0].model.training and p < self.forward_attack_rate:
             input_perturbation = torch.normal(mean=float(input.mean()), std=float(input.std()), size=tuple(input.shape), device=input.device)
             input.data.add_(input_perturbation)
+            self.attack_stage[index] = 1
         return input
 
     def virtual_forward(self, aux_input_data, index, input_ids_micro_batch=None, iter=0):
@@ -229,7 +246,7 @@ class VirtualAsync:
             if i == 0:
                 if self.virtual_gpus[i].virtual_rank == 0:
                     tmp_output = self.virtual_gpus[i].forward(self.input_micro_batches[index], aux_input_data, index, input_ids_micro_batch)
-                    tmp_output = self.forward_attack(tmp_output)
+                    tmp_output = self.forward_attack(tmp_output, index)
                 elif self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
                     with torch.no_grad():
                         self.activate_cache.copy_(self.input_micro_batches[index])
@@ -237,7 +254,7 @@ class VirtualAsync:
                     if not valid:
                         return torch.zeros(self.input_micro_batches[index].size(), device=self.device)
                     tmp_output = self.virtual_gpus[i].forward(self.input_micro_batches[index], aux_input_data, index, input_ids_micro_batch)
-                    tmp_output = self.forward_attack(tmp_output)
+                    tmp_output = self.forward_attack(tmp_output, index)
                 else:
                     with torch.no_grad():
                         self.activate_cache.copy_(self.input_micro_batches[index])
@@ -253,7 +270,7 @@ class VirtualAsync:
                     if not valid:
                         return torch.zeros(tmp_output.size(), device=self.device)
                     tmp_output = self.virtual_gpus[i].forward(tmp_output, aux_input_data, index, input_ids_micro_batch)
-                    tmp_output = self.forward_attack(tmp_output)
+                    tmp_output = self.forward_attack(tmp_output, index)
                 else:
                     with torch.no_grad():
                         self.activate_cache.copy_(tmp_output)
@@ -439,6 +456,37 @@ class VirtualAsync:
                 cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
                 self.comm.send(self.success_stage, self.pre_node_rank, cupy_send_stream)
 
+    def get_attack_status(self):
+        if self.pp_rank == 0:
+            with torch.cuda.stream(self.torch_send_stream):
+                cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
+                self.comm.send(self.attack_stage, self.post_node_rank, cupy_send_stream)
+        elif self.pp_rank == self.pipeline_group_size - 1:
+            with torch.cuda.stream(self.torch_recv_stream):
+                cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
+                self.comm.recv(self.attack_stage_cache, self.pre_node_rank, cupy_recv_stream)
+                self.torch_recv_stream.record_event(self.attack_recv_ready_event)
+            with torch.cuda.stream(self.torch_comp_stream):
+                self.torch_comp_stream.wait_event(self.attack_recv_ready_event)
+                for i in range(len(self.attack_stage_cache)):
+                    if self.attack_stage_cache[i]:
+                        self.attack_stage[i] = self.attack_stage_cache[i]
+        else:
+            with torch.cuda.stream(self.torch_recv_stream):
+                cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
+                self.comm.recv(self.attack_stage_cache, self.pre_node_rank, cupy_recv_stream)
+                self.torch_recv_stream.record_event(self.attack_recv_ready_event)
+            with torch.cuda.stream(self.torch_comp_stream):
+                self.torch_comp_stream.wait_event(self.attack_recv_ready_event)
+                for i in range(len(self.attack_stage_cache)):
+                    if self.attack_stage_cache[i]:
+                        self.attack_stage[i] = self.attack_stage_cache[i]
+                self.torch_comp_stream.record_event(self.attack_comp_ready_event)
+            with torch.cuda.stream(self.torch_send_stream):
+                cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
+                self.torch_send_stream.wait_event(self.attack_comp_ready_event)
+                self.comm.send(self.attack_stage, self.post_node_rank, cupy_send_stream)
+
     def optimizer_step(self):
         for i in range(len(self.virtual_gpus)):
             torch.nn.utils.clip_grad_norm_(self.virtual_gpus[i].model.parameters(), 1.0)
@@ -458,6 +506,7 @@ class VirtualAsync:
 
         for step in range(self.gradient_accumulate_step):
             self.success_stage = torch.ones(self.micro_batch_num, dtype=torch.int, device=self.device)
+            self.attack_stage = torch.zeros(self.micro_batch_num, dtype=torch.int, device=self.device)
             outputs = self.forward_stage(input_, aux_input_data=aux_input_data, iter=iter)
             forward_time = time.time()
             if step == 0:
@@ -470,7 +519,18 @@ class VirtualAsync:
             self.comm.barrier()
 
             self.get_status()
+            self.get_attack_status()
+            torch.cuda.synchronize()
             self.comm.barrier()
+
+            self.global_attack.extend(self.attack_stage.tolist())
+            self.global_invalid.extend([1 if x == 0 else 0 for x in self.success_stage])
+            if len(self.sample_error_times) // self.micro_batch_num == iter:
+                self.sample_error_times.extend([0 if self.attack_stage[i] != self.success_stage[i] else 1 for i in range(self.micro_batch_num)])
+            else:
+                for i in range(self.micro_batch_num):
+                    if self.attack_stage[i] == self.success_stage[i]:
+                        self.sample_error_times[self.micro_batch_num * iter + i] += 1
 
             grad = self.backward_stage(outputs, target, loss_func=loss_func)
             backward_time = time.time()

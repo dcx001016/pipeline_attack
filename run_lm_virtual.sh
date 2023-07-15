@@ -1,7 +1,7 @@
 ARGS="--model-name checkpoints/gpt2 \
 --tokenizer-name gpt2 \
 --load-pretrained-model true \
---task-name wikitext --n-epochs 5 --warmup-epochs 1 \
+--task-name wikitext --n-epochs 10 --warmup-epochs 1 \
 --num-layers 6 --num-heads 10 --embedding-dim 768 \
 --num-iters 1000 --lr 5e-5 --seq-length 1024 --batch-size 4 --micro-batch-size 1 \
 --optimizer AdamW \
@@ -10,8 +10,9 @@ ARGS="--model-name checkpoints/gpt2 \
 --backward-compress-method none \
 --backward-bits 8 \
 --dist-url tcp://127.0.0.1:9033 \
---alpha 1.0 \
---world-size 2 --pipeline-group-size 2 --pipeline-virtual-gpus 4 \
+--alpha 1.0 --dropout false \
+--world-size 2 --pipeline-group-size 2 --pipeline-virtual-gpus 6 \
+--history-length 100 --top-n 10 \
 --pp-mode gpipe-bamboo --profiling no-profiling --do-evaluation true \
 --forward-attack false --forward-attack-rate 0.4 \
 --backward-attack false --backward-attack-rate 0.3 \

@@ -81,61 +81,61 @@ class GPTBlock(_GPT2Block):
         return x
 
 
-class GPTModel(_GPT2Model):
-    def __init__(self, config):
-        super(_GPT2Model, self).__init__(config)
+# class GPTModel(_GPT2Model):
+#     def __init__(self, config):
+#         super(_GPT2Model, self).__init__(config)
 
-        self.embed_dim = config.hidden_size
+#         self.embed_dim = config.hidden_size
         
-        emb_layer = GPTEmbeddings(config)
-        self.wte = emb_layer.wte
-        self.wpe = emb_layer.wpe
+#         emb_layer = GPTEmbeddings(config)
+#         self.wte = emb_layer.wte
+#         self.wpe = emb_layer.wpe
 
-        self.drop = nn.Dropout(config.embd_pdrop)
-        self.h = nn.ModuleList([GPTBlock(config, layer_idx=i, use_checkpoint=True) for i in range(config.num_hidden_layers)])
-        self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
+#         self.drop = nn.Dropout(config.embd_pdrop)
+#         self.h = nn.ModuleList([GPTBlock(config, layer_idx=i, use_checkpoint=True) for i in range(config.num_hidden_layers)])
+#         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
 
-        # Model parallel
-        self.model_parallel = False
-        self.device_map = None
-        self.gradient_checkpointing = False
+#         # Model parallel
+#         self.model_parallel = False
+#         self.device_map = None
+#         self.gradient_checkpointing = False
 
-        # Initialize weights and apply final processing
-        self.post_init()
+#         # Initialize weights and apply final processing
+#         self.post_init()
         
-    def forward(self, input_ids, attention_mask=None, **kargs):
+#     def forward(self, input_ids, attention_mask=None, **kargs):
         
-        device = input_ids.device
+#         device = input_ids.device
         
-        # input ids
-        input_shape = input_ids.size()
-        input_ids = input_ids.view(-1, input_shape[-1])
-        batch_size = input_shape[0]
+#         # input ids
+#         input_shape = input_ids.size()
+#         input_ids = input_ids.view(-1, input_shape[-1])
+#         batch_size = input_shape[0]
         
-        # position ids
-        position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
-        position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
+#         # position ids
+#         position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
+#         position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
             
-        inputs_embeds = self.wte(input_ids)
-        position_embeds = self.wpe(position_ids)
-        hidden_states = inputs_embeds + position_embeds
+#         inputs_embeds = self.wte(input_ids)
+#         position_embeds = self.wpe(position_ids)
+#         hidden_states = inputs_embeds + position_embeds
 
-        hidden_states = self.drop(hidden_states)
+#         hidden_states = self.drop(hidden_states)
 
-        hidden_states_tuple = tuple()
-        for layer in self.h:
-            hidden_states_tuple = hidden_states_tuple + (hidden_states,)
-            hidden_states = layer(hidden_states)
-        hidden_states = self.ln_f(hidden_states)
-        hidden_states_tuple = hidden_states_tuple + (hidden_states,)
+#         hidden_states_tuple = tuple()
+#         for layer in self.h:
+#             hidden_states_tuple = hidden_states_tuple + (hidden_states,)
+#             hidden_states = layer(hidden_states)
+#         hidden_states = self.ln_f(hidden_states)
+#         hidden_states_tuple = hidden_states_tuple + (hidden_states,)
         
-        return BaseModelOutputWithPastAndCrossAttentions(
-            last_hidden_state=hidden_states,
-            past_key_values=None,
-            hidden_states=hidden_states_tuple,
-            attentions=None,
-            cross_attentions=None,
-        )
+#         return BaseModelOutputWithPastAndCrossAttentions(
+#             last_hidden_state=hidden_states,
+#             past_key_values=None,
+#             hidden_states=hidden_states_tuple,
+#             attentions=None,
+#             cross_attentions=None,
+#         )
 
 
 class GPTLMHead(nn.Module):
@@ -149,20 +149,20 @@ class GPTLMHead(nn.Module):
         x = self.lm_head(x)
         return x
     
-class GPTLMHeadModel(_GPT2LMHeadModel):
+# class GPTLMHeadModel(_GPT2LMHeadModel):
 
-    def __init__(self, config):
-        super(_GPT2LMHeadModel, self).__init__(config)
-        self.transformer = GPTModel(config)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # ln_f will be calculated in self.transformer
+#     def __init__(self, config):
+#         super(_GPT2LMHeadModel, self).__init__(config)
+#         self.transformer = GPTModel(config)
+#         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+#         # ln_f will be calculated in self.transformer
 
-        # Model parallel
-        self.model_parallel = False
-        self.device_map = None
+#         # Model parallel
+#         self.model_parallel = False
+#         self.device_map = None
         
-        # Initialize weights and apply final processing
-        self.post_init()
+#         # Initialize weights and apply final processing
+#         self.post_init()
 
 
 class GPTClassificationHead(nn.Module):

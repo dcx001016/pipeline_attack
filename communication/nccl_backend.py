@@ -3,6 +3,7 @@ import numpy as np
 import cupy
 import torch.distributed as dist
 from typing import List
+from datetime import timedelta
 
 def _type_torch_to_cupy(torch_type: torch.dtype):
     # print(torch_type)
@@ -204,5 +205,5 @@ class NCCLCommunicator:
 
 
 def default_init(args):
-    dist.init_process_group(backend='gloo', init_method=args.dist_url, world_size=args.world_size, rank=args.rank)
+    dist.init_process_group(backend='gloo', init_method=args.dist_url, world_size=args.world_size, rank=args.rank, timeout=timedelta(seconds=100))
         
