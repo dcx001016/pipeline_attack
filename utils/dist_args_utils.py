@@ -66,6 +66,8 @@ def add_training_hyper_parameter_arguments(parser):
                         help='-')
     parser.add_argument('--dropout', default=True, type=lambda x: (str(x).lower() == 'true'),
                         help='-')
+    parser.add_argument('--distance', type=str, default="l2", metavar='N',
+                        help='-')
 
 def add_acitvation_compression_arguments(parser):
     parser.add_argument('--forward-compress-method', type=str, default='none', metavar='N',
@@ -109,7 +111,7 @@ def add_mixed_precision_arguments(parser):
 
     
 def add_parallel_schema_arguments(parser):
-    parser.add_argument('--pp-mode', type=str, default='gpipe-kv', metavar='S',
+    parser.add_argument('--pp-mode', type=str, default='gpipe-hash', metavar='S',
                         help='use which pipeline parallel mode: gpipe or 1f1b.')
     parser.add_argument('--dp-mode', type=str, default='allreduce', metavar='S',
                         help='use which data parallel mode: allreduce.')

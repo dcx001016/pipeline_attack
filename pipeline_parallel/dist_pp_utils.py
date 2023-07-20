@@ -2,6 +2,8 @@ from .dist_gpipe_pipeline_async import GpipeAsync
 from .dist_pipeline_async_virtual import VirtualAsync
 from .dist_bamboo_pipeline_async_virtual import BambooVirtualAsync
 from .dist_pipeline_async_key_value import VirtualKeyValueAsync
+from .dist_pipeline_async_key_value_soft import VirtualKeyValueSoftAsync
+from .dist_pipeline_async_hash import VirtualHashAsync
 from modules.dist_deberta_pp_module import *
 
 def get_pp_module_virtual(args, config, device):
@@ -11,6 +13,10 @@ def get_pp_module_virtual(args, config, device):
         return BambooVirtualAsync(args, config, device)
     elif args.pp_mode == 'gpipe-kv':
         return VirtualKeyValueAsync(args, config, device)
+    elif args.pp_mode == 'gpipe-kv-soft':
+        return VirtualKeyValueSoftAsync(args, config, device)
+    elif args.pp_mode == 'gpipe-hash':
+        return VirtualHashAsync(args, config, device)
     else:
         print("Not recognize this pipeline parallel mode.")
         assert False

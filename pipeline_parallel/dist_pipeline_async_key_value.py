@@ -4,6 +4,7 @@ from communication.comm_utils import *
 from modules.dist_gpt_pp_module import *
 from optimizer.optimizer import get_fp16_optimizer
 from compress import get_compressor
+from utils.common_utils import calculate_metrics
 import cupy
 import copy
 import wandb
@@ -27,6 +28,7 @@ class VirtualGPU:
         self.history_length = args.history_length
         self.top_n = args.top_n
         self.history = []
+        self.distance_mode = args.distance
 
         self.device = device
 
@@ -71,10 +73,24 @@ class VirtualGPU:
             self.history.append([_in, _out])
             return True
         
-        in_distances = [torch.dist(history[0], _in) for history in self.history]
+        if self.distance_mode == "l2":
+            in_distances = [torch.dist(history[0], _in) for history in self.history]
+        elif self.distance_mode == "cos":
+            in_distances = [1 - torch.nn.functional.cosine_similarity(history[0].view(1, -1), _in.view(1, -1)) for history in self.history]
+        else:
+            print("Not recognize this distance.")
+            assert False
+
         in_closest_index = min(range(len(in_distances)), key=lambda i: in_distances[i])
 
-        out_distances = [torch.dist(history[1], _out) for history in self.history]
+        if self.distance_mode == "l2":
+            out_distances = [torch.dist(history[1], _out) for history in self.history]
+        elif self.distance_mode == "cos":
+            out_distances = [1 - torch.nn.functional.cosine_similarity(history[1].view(1, -1), _out.view(1, -1)) for history in self.history]
+        else:
+            print("Not recognize this distance.")
+            assert False
+
         out_closest_indexes = sorted(range(len(out_distances)), key=lambda i: out_distances[i])[:self.top_n]
         
         if in_closest_index in out_closest_indexes:
@@ -128,8 +144,11 @@ class VirtualKeyValueAsync:
         self.torch_recv_stream = torch.cuda.Stream(device=device, priority=-1)
         self.torch_send_stream = torch.cuda.Stream(device=device, priority=-1)
 
+        self.local_attack = []
+        self.local_invalid = []
         self.global_invalid = []
         self.global_attack = []
+        self.epoch_metrics = {}
         self.sample_error_times = []
         self.attack_stage_cache = torch.zeros(self.micro_batch_num, dtype=torch.int, device=self.device)
 
@@ -227,6 +246,17 @@ class VirtualKeyValueAsync:
             for input_micro_batch in self.input_micro_batches:
                 if input_micro_batch.grad is not None:
                     input_micro_batch.grad.zero_()
+
+    def get_metrics(self):
+        epoch_metrics = calculate_metrics(self.local_attack, self.local_invalid)
+        self.epoch_metrics[len(self.epoch_metrics)] = {
+            "tp": epoch_metrics[0],
+            "fp": epoch_metrics[1],
+            "tn": epoch_metrics[2],
+            "fn": epoch_metrics[3]
+        }
+        self.local_attack = []
+        self.local_invalid = []
 
     def forward_attack(self, input: torch.Tensor, last_input: torch.Tensor, index):
         p = random.random()
@@ -529,6 +559,8 @@ class VirtualKeyValueAsync:
 
             self.global_attack.extend(self.attack_stage.tolist())
             self.global_invalid.extend([1 if x == 0 else 0 for x in self.success_stage])
+            self.local_attack.extend(self.attack_stage.tolist())
+            self.local_invalid.extend([1 if x == 0 else 0 for x in self.success_stage])
             if len(self.sample_error_times) // self.micro_batch_num == iter:
                 self.sample_error_times.extend([0 if self.attack_stage[i] != self.success_stage[i] else 1 for i in range(self.micro_batch_num)])
             else:

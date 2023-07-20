@@ -22,7 +22,7 @@ def train_loop(args, pipe, device, train_data_loader, test_data_loader):
     
     for e in range(args.n_epochs):
         distributed_train_lm_iter_virtual(args, pipe, device, train_data_loader)
-        
+        pipe.get_metrics()
         if test_data_loader is not None and args.do_evaluation:
             distributed_test_lm_iter_virtual(args, pipe, device, test_data_loader, e)
 

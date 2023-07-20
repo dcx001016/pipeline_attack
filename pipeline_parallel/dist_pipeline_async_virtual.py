@@ -4,6 +4,7 @@ from communication.comm_utils import *
 from modules.dist_gpt_pp_module import *
 from optimizer.optimizer import get_fp16_optimizer
 from compress import get_compressor
+from utils.common_utils import calculate_metrics
 import cupy
 import copy
 import wandb
@@ -25,13 +26,14 @@ class VirtualGPU:
         self.pipeline_virtual_gpus = args.pipeline_virtual_gpus
         self.virtual_rank = virtual_rank
         self.activation = []
-        self.cosine_distance = []
+        self.distance = []
         self.micro_batch_size = args.micro_batch_size
         self.seq_length = args.seq_length
         self.embedding_dim = args.embedding_dim
 
         self.device = device
         self.alpha = args.alpha
+        self.distance_mode = args.distance
 
         if virtual_rank == 0:
             self.model = _StageFirst(args, config, device)
@@ -75,19 +77,27 @@ class VirtualGPU:
                             requires_grad=False, dtype=self.dtype
                         ) for _ in range(micro_batch_num)
             ])
-            self.cosine_distance.append([None]*micro_batch_num)
+            self.distance.append([None]*micro_batch_num)
             self.activation[iter][index].copy_(_in)
             return True
         if torch.all(self.activation[iter][index] == 0):
             self.activation[iter][index].copy_(_in)
             return True
-        cosine_distance  = 1 - torch.nn.functional.cosine_similarity(_in.view(1, -1), self.activation[iter][index].view(1, -1)).item()
-        if self.cosine_distance[iter][index] is None:
-            self.cosine_distance[iter][index] = cosine_distance
+        
+        if self.distance_mode == "cos":
+            distance  = 1 - torch.nn.functional.cosine_similarity(_in.view(1, -1), self.activation[iter][index].view(1, -1)).item()
+        elif self.distance_mode == "l2":
+            distance  = torch.dist(_in, self.activation[iter][index]).item()
+        else:
+            print("Not recognize this distance.")
+            assert False
+            
+        if self.distance[iter][index] is None:
+            self.distance[iter][index] = distance
             self.activation[iter][index].copy_(_in)
             return True
-        if self.cosine_distance[iter][index] * self.alpha >= cosine_distance:
-            self.cosine_distance[iter][index] = cosine_distance * 0.5 + self.cosine_distance[iter][index] * 0.5
+        if self.distance[iter][index] * self.alpha >= distance:
+            self.distance[iter][index] = distance * 0.5 + self.distance[iter][index] * 0.5
             self.activation[iter][index].copy_(_in)
             return True
         return False
@@ -133,8 +143,11 @@ class VirtualAsync:
         self.torch_recv_stream = torch.cuda.Stream(device=device, priority=-1)
         self.torch_send_stream = torch.cuda.Stream(device=device, priority=-1)
 
+        self.local_attack = []
+        self.local_invalid = []
         self.global_invalid = []
         self.global_attack = []
+        self.epoch_metrics = {}
         self.sample_error_times = []
         self.attack_stage_cache = torch.zeros(self.micro_batch_num, dtype=torch.int, device=self.device)
 
@@ -232,6 +245,17 @@ class VirtualAsync:
             for input_micro_batch in self.input_micro_batches:
                 if input_micro_batch.grad is not None:
                     input_micro_batch.grad.zero_()
+
+    def get_metrics(self):
+        epoch_metrics = calculate_metrics(self.local_attack, self.local_invalid)
+        self.epoch_metrics[len(self.epoch_metrics)] = {
+            "tp": epoch_metrics[0],
+            "fp": epoch_metrics[1],
+            "tn": epoch_metrics[2],
+            "fn": epoch_metrics[3]
+        }
+        self.local_attack = []
+        self.local_invalid = []
 
     def forward_attack(self, input: torch.Tensor, index):
         p = random.random()
@@ -525,6 +549,8 @@ class VirtualAsync:
 
             self.global_attack.extend(self.attack_stage.tolist())
             self.global_invalid.extend([1 if x == 0 else 0 for x in self.success_stage])
+            self.local_attack.extend(self.attack_stage.tolist())
+            self.local_invalid.extend([1 if x == 0 else 0 for x in self.success_stage])
             if len(self.sample_error_times) // self.micro_batch_num == iter:
                 self.sample_error_times.extend([0 if self.attack_stage[i] != self.success_stage[i] else 1 for i in range(self.micro_batch_num)])
             else:
