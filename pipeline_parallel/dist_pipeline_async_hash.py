@@ -4,13 +4,76 @@ from communication.comm_utils import *
 from modules.dist_gpt_pp_module import *
 from optimizer.optimizer import get_fp16_optimizer
 from compress import get_compressor
-from utils.common_utils import calculate_metrics, print_tensor
+from utils.common_utils import calculate_metrics
 import cupy
 import copy
 import wandb
 
 from transformers import get_linear_schedule_with_warmup
 from .dist_gpipe_pipeline_async import create_optimizer
+
+class SHA256:
+    def __init__(self):
+        self.constants = (
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+            0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+            0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+            0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+            0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+            0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+            0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+            0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+            0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2)
+        
+        self.h = (
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19)
+
+    def rightrotate(self, x, b):
+        return ((x >> b) | (x << (32 - b))) & ((2**32)-1)
+
+    def Pad(self, W):
+        return bytes(W, "ascii") + b"\x80" + (b"\x00" * ((55 if (len(W) % 64) < 56 else 119) - (len(W) % 64))) + (
+            (len(W) << 3).to_bytes(8, "big"))
+
+    def Compress(self, Wt, Kt, A, B, C, D, E, F, G, H):
+        return ((H + (self.rightrotate(E, 6) ^ self.rightrotate(E, 11) ^ self.rightrotate(E, 25)) + (
+                    (E & F) ^ (~E & G)) + Wt + Kt) + (
+                            self.rightrotate(A, 2) ^ self.rightrotate(A, 13) ^ self.rightrotate(A, 22)) + (
+                            (A & B) ^ (A & C) ^ (B & C))) & ((2**32)-1), A, B, C, (D + (
+                    H + (self.rightrotate(E, 6) ^ self.rightrotate(E, 11) ^ self.rightrotate(E, 25)) + (
+                        (E & F) ^ (~E & G)) + Wt + Kt)) & ((2**32)-1), E, F, G
+
+    def hash(self, message):
+        message = self.Pad(message)
+        digest = list(self.h)
+
+        for i in range(0, len(message), 64):
+            S = message[i: i + 64]
+            W = [int.from_bytes(S[e: e + 4], "big") for e in range(0, 64, 4)] + ([0] * 48)
+
+            #构造64个word
+            for j in range(16, 64):
+                W[j] = (W[j - 16] + (
+                            self.rightrotate(W[j - 15], 7) ^ self.rightrotate(W[j - 15], 18) ^ (W[j - 15] >> 3)) + W[
+                            j - 7] + (self.rightrotate(W[j - 2], 17) ^ self.rightrotate(W[j - 2], 19) ^ (
+                            W[j - 2] >> 10))) & ((2**32)-1)
+
+            A, B, C, D, E, F, G, H = digest
+
+            for j in range(64):
+                A, B, C, D, E, F, G, H = self.Compress(W[j], self.constants[j], A, B, C, D, E, F, G, H)
+
+        return sum([A, B, C, D, E, F, G, H])
+        # return "".join(format(h, "02x") for h in b"".join(
+        #     d.to_bytes(4, "big") for d in [(x + y) & ((2**32)-1) for x, y in zip(digest, (A, B, C, D, E, F, G, H))]))
 
 class VirtualGPU:
     def __init__(self, args, config, virtual_rank, device,
@@ -25,11 +88,13 @@ class VirtualGPU:
         self.pipeline_virtual_gpus = args.pipeline_virtual_gpus
         self.virtual_rank = virtual_rank
         self.history_length = args.history_length
+        self.micro_batch_size = args.micro_batch_size
         self.top_n = args.top_n
         self.history = []
         self.distance_mode = args.distance
         self.seq_length = args.seq_length
         self.embedding_dim = args.embedding_dim
+        self.encoder = SHA256()
 
         self.device = device
 
@@ -40,11 +105,11 @@ class VirtualGPU:
         else:
             self.model = _StageMiddle(args, config, device)
 
-        self.valid_model = torch.nn.Conv1d(self.seq_length, self.seq_length, 1, bias=False, device=device)
+        # self.valid_model = torch.nn.Conv1d(self.seq_length, self.seq_length, 1, bias=False, device=device)
 
         if self.use_fp16:
             self.model.half()
-            self.valid_model.half()
+            # self.valid_model.half()
 
     def forward(self, input, aux_input_data, index, input_ids_micro_batch=None):
         if self.virtual_rank == self.pipeline_virtual_gpus - 1:
@@ -69,10 +134,16 @@ class VirtualGPU:
         return out
     
     def get_hash_code(self, input: torch.Tensor):
-        return self.valid_model(input)
+        # return self.valid_model(input)
+        row_sum = torch.sum(input, dim=-1).view(self.micro_batch_size, -1, 1)
+        # hash_code = torch.zeros_like(row_sum, device=self.device, dtype=self.dtype)
+        # for i in range(len(row_sum)):
+        #     for j in range(len(row_sum[i])):
+        #         hash_code[i][j][0] = self.encoder.hash(str(row_sum[i][j][0].item()))
+        return row_sum
 
-    def valid(self, _data, _out):
-        return torch.equal(self.valid_model(_data), _out)
+    def valid(self, _data, hash_code):
+        return torch.equal(self.get_hash_code(_data), hash_code)
         
 
 class VirtualHashAsync:
@@ -161,9 +232,9 @@ class VirtualHashAsync:
 
         self.virtual_gpus = [VirtualGPU(args, config, i, device, _StageFirst, _StageLast, _StageMiddle) for i in range(args.virtual_gpus * self.pp_rank, args.virtual_gpus * (self.pp_rank + 1))]
 
-        self.get_valid_model()
-        torch.cuda.synchronize()
-        self.comm.barrier()
+        # self.get_valid_model()
+        # torch.cuda.synchronize()
+        # self.comm.barrier()
 
         self.forward_compressor = get_compressor(
             compress_method=args.forward_compress_method, 
@@ -179,7 +250,7 @@ class VirtualHashAsync:
             seq_length=args.seq_length,
             embedding_dim=args.embedding_dim,
             device=device, dtype=self.dtype,
-            redundant=True
+            hash=True
         )
         
         self.backward_compressor = get_compressor(
@@ -282,7 +353,7 @@ class VirtualHashAsync:
                 elif self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
                     with torch.no_grad():
                         if hash_code is not None and not self.virtual_gpus[i].valid(self.input_micro_batches[index], hash_code):
-                            return torch.zeros_like(self.input_micro_batches[index], device=self.device), torch.zeros_like(self.input_micro_batches[index], device=self.device)
+                            return torch.zeros_like(self.input_micro_batches[index], device=self.device), torch.zeros_like(hash_code, device=self.device)
                     tmp_output = self.virtual_gpus[i].forward(self.input_micro_batches[index], aux_input_data, index, input_ids_micro_batch)
                     with torch.no_grad():
                         hash_code = self.virtual_gpus[i].get_hash_code(tmp_output)
@@ -290,13 +361,13 @@ class VirtualHashAsync:
                 else:
                     with torch.no_grad():
                         if hash_code is not None and not self.virtual_gpus[i].valid(self.input_micro_batches[index], hash_code):
-                            return torch.zeros_like(self.input_micro_batches[index], device=self.device), torch.zeros_like(self.input_micro_batches[index], device=self.device)
+                            return torch.zeros_like(self.input_micro_batches[index], device=self.device), torch.zeros_like(hash_code, device=self.device)
                     tmp_output = self.virtual_gpus[i].forward(self.input_micro_batches[index], aux_input_data, index, input_ids_micro_batch)
             else:
                 if self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
                     with torch.no_grad():
                         if not self.virtual_gpus[i].valid(tmp_output, hash_code):
-                            return torch.zeros_like(tmp_output, device=self.device), torch.zeros_like(tmp_output, device=self.device)
+                            return torch.zeros_like(tmp_output, device=self.device), torch.zeros_like(hash_code, device=self.device)
                     tmp_output = self.virtual_gpus[i].forward(tmp_output, aux_input_data, index, input_ids_micro_batch)
                     with torch.no_grad():
                         hash_code = self.virtual_gpus[i].get_hash_code(tmp_output)
@@ -304,7 +375,7 @@ class VirtualHashAsync:
                 else:
                     with torch.no_grad():
                         if not self.virtual_gpus[i].valid(tmp_output, hash_code):
-                            return torch.zeros_like(tmp_output, device=self.device), torch.zeros_like(tmp_output, device=self.device)
+                            return torch.zeros_like(tmp_output, device=self.device), torch.zeros_like(hash_code, device=self.device)
                     tmp_output = self.virtual_gpus[i].forward(tmp_output, aux_input_data, index, input_ids_micro_batch)
 
             # if self.virtual_gpus[i].model.training and self.virtual_gpus[i].virtual_rank != self.pipeline_virtual_gpus - 1:
@@ -346,7 +417,8 @@ class VirtualHashAsync:
                 with torch.cuda.stream(self.torch_send_stream):
                     cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
                     self.torch_send_stream.wait_event(self.forward_comp_ready_events[i])
-                    send_data = torch.stack((current_micro_output.data, hash_code.data), dim=0)
+                    # send_data = torch.stack((current_micro_output.data, hash_code.data), dim=0)
+                    send_data = torch.cat((current_micro_output.data, hash_code.data), dim=-1)
                     self.forward_compressor.compress_send(
                         send_data.data, i_micro_batch=i,
                         comm=self.comm, dst=self.post_node_rank, stream=cupy_send_stream
@@ -356,15 +428,15 @@ class VirtualHashAsync:
                     cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
                     _data = self.forward_compressor.recv_decompress(
                         i, comm=self.comm, src=self.pre_node_rank, stream=cupy_recv_stream)
-                    self.input_micro_batches[i].data.copy_(_data[0])
-                    hash_code = _data[1].clone()
+                    self.input_micro_batches[i].data.copy_(_data[:, :, :self.embedding_dim])
+                    hash_code = _data[:, :, self.embedding_dim:]
                     self.torch_recv_stream.record_event(self.forward_recv_ready_events[i])
                 with torch.cuda.stream(self.torch_comp_stream):
                     self.torch_comp_stream.wait_event(self.forward_recv_ready_events[i])
                     if torch.any(_data):
                         current_micro_output, hash_code = self.virtual_forward(aux_input_data, i, input_ids_micro_batches[i], hash_code)
                     else:
-                        current_micro_output, hash_code = _data[0].clone(), _data[1].clone()
+                        current_micro_output, hash_code = _data[:, :, :self.embedding_dim].clone(), _data[:, :, self.embedding_dim:].clone()
                     if torch.all(current_micro_output == 0):
                         self.success_stage[i] = 0
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
@@ -373,22 +445,26 @@ class VirtualHashAsync:
                     cupy_recv_stream = cupy.cuda.ExternalStream(self.torch_recv_stream.cuda_stream)
                     _data = self.forward_compressor.recv_decompress(
                         i, comm=self.comm, src=self.pre_node_rank, stream=cupy_recv_stream)
-                    self.input_micro_batches[i].data.copy_(_data[0])
-                    hash_code = _data[1].clone()
+                    # self.input_micro_batches[i].data.copy_(_data[0])
+                    # hash_code = _data[1].clone()
+                    self.input_micro_batches[i].data.copy_(_data[:, :, :self.embedding_dim])
+                    hash_code = _data[:, :, self.embedding_dim:]
                     self.torch_recv_stream.record_event(self.forward_recv_ready_events[i])
                 with torch.cuda.stream(self.torch_comp_stream):
                     self.torch_comp_stream.wait_event(self.forward_recv_ready_events[i])
                     if torch.any(_data):
                         current_micro_output, hash_code = self.virtual_forward(aux_input_data, i, hash_code=hash_code)
                     else:
-                        current_micro_output, hash_code = _data[0].clone(), _data[1].clone()
+                        # current_micro_output, hash_code = _data[0].clone(), _data[1].clone()
+                        current_micro_output, hash_code = _data[:, :, :self.embedding_dim].clone(), _data[:, :, self.embedding_dim:].clone()
                     if torch.all(current_micro_output == 0):
                         self.success_stage[i] = 0
                     self.torch_comp_stream.record_event(self.forward_comp_ready_events[i])
                 with torch.cuda.stream(self.torch_send_stream):
                     cupy_send_stream = cupy.cuda.ExternalStream(self.torch_send_stream.cuda_stream)
                     self.torch_send_stream.wait_event(self.forward_comp_ready_events[i])
-                    send_data = torch.stack((current_micro_output.data, hash_code.data), dim=0)
+                    # send_data = torch.stack((current_micro_output.data, hash_code.data), dim=0)
+                    send_data = torch.cat((current_micro_output.data, hash_code.data), dim=-1)
                     self.forward_compressor.compress_send(
                         send_data.data, i_micro_batch=i,
                         comm=self.comm, dst=self.post_node_rank, stream=cupy_send_stream

@@ -15,7 +15,7 @@ ARGS="--model-name checkpoints/gpt2 \
 --history-length 100 --top-n 11 \
 --distance cos \
 --pp-mode gpipe-hash --profiling no-profiling --do-evaluation true \
---forward-attack true --forward-attack-rate 0.4 \
+--forward-attack false --forward-attack-rate 0.4 \
 --backward-attack false --backward-attack-rate 0.3 \
 --wandb false --write-xlsx true"
 

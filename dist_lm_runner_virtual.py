@@ -19,12 +19,18 @@ from tasks.data_loaders.wikitext import *
 from pipeline_parallel.dist_pp_utils import get_pp_module_virtual
 
 def train_loop(args, pipe, device, train_data_loader, test_data_loader):
-    
+    total_train_time = 0
+    pipe.results = []
     for e in range(args.n_epochs):
+        start_time = time.time()
         distributed_train_lm_iter_virtual(args, pipe, device, train_data_loader)
+        end_time = time.time()
+        total_train_time += end_time - start_time
         pipe.get_metrics()
         if test_data_loader is not None and args.do_evaluation:
             distributed_test_lm_iter_virtual(args, pipe, device, test_data_loader, e)
+
+    return total_train_time
 
 def main():
     start_time = time.time()
@@ -204,11 +210,11 @@ def main():
     #             if i % args.virtual_num_layers == 0:
     #                 pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
 
-    train_loop(args, pipe, device, train_data_loader, test_data_loader)
+    total_train_time = train_loop(args, pipe, device, train_data_loader, test_data_loader)
     
     end_time = time.time()
     duration = end_time - start_time
-    print(get_pipeline_parallel_rank(), 'finished.', "total time:%s" % format_time(duration), "invalid rate:%.2f%%" % (pipe.get_invalid_rate() * 100))
+    print(get_pipeline_parallel_rank(), 'finished.', "total time:%s" % format_time(duration), "total train time:%s" % format_time(total_train_time), "invalid rate:%.2f%%" % (pipe.get_invalid_rate() * 100))
     
 
 if __name__ == '__main__':

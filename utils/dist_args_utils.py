@@ -22,7 +22,7 @@ def add_torch_distributed_arguments(parser):
                         help='data-group-size (default: 1)')
     parser.add_argument('--pipeline-virtual-gpus', type=int, default=6, metavar='D',
                         help='pipeline-virtual-gpus (default: 6)')
-    parser.add_argument('--rank', type=int, default=0, metavar='N',
+    parser.add_argument('--rank', type=int, default=1, metavar='N',
                         help='rank of the node')
     
 

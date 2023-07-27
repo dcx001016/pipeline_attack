@@ -70,7 +70,7 @@ class VirtualGPU:
     def valid(self, iter, index, micro_batch_num, _in):
         if not self.model.training:
             return True
-        
+        return True
         if len(self.activation) <= iter:
             self.activation.append([
                 torch.zeros((self.micro_batch_size, self.seq_length, self.embedding_dim),

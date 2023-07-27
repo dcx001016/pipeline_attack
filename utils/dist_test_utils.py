@@ -110,12 +110,13 @@ def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, e
             metric.name: metric.compute() for metric in metrics
         }
         print(result)
+        pipeline.results.append(result)
         if epoch == args.n_epochs - 1:
             data = {
                 "pp_mode": args.pp_mode,
                 "pipeline_virtual_gpus": args.pipeline_virtual_gpus,
                 "forward_attack_rate": args.forward_attack_rate,
-                "result": result,
+                "results": pipeline.results,
                 "epoch_metrics": pipeline.epoch_metrics,
                 "sample_error_times": pipeline.sample_error_times
             }
