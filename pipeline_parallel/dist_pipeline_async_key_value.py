@@ -202,7 +202,7 @@ class VirtualKeyValueAsync:
             seq_length=args.seq_length,
             embedding_dim=args.embedding_dim,
             device=device, dtype=self.dtype,
-            redundant=True
+            redundant=2
         )
         
         self.backward_compressor = get_compressor(

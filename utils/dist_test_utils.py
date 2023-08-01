@@ -34,13 +34,13 @@ def writetoxlsx_lm(task_name, model, epoch,
                 # distance,
                 # alpha,
                 # history_length, top_n,
-                iters,
+                # iters,
                 optimizer, pipeline_virtual_gpus,
                 perplexity, loss,
                 tp, fp, tn, fn,
                 invalid_rate):
 
-    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_hash.xlsx")
+    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_redundant.xlsx")
 
     sheet = workbook.active
 
@@ -53,17 +53,17 @@ def writetoxlsx_lm(task_name, model, epoch,
     # sheet["F" + row_count] = distance
     # sheet["G" + row_count] = history_length
     # sheet["H" + row_count] = top_n
-    sheet["F" + row_count] = iters
-    sheet["G" + row_count] = optimizer
-    sheet["H" + row_count] = pipeline_virtual_gpus
-    sheet["I" + row_count] = perplexity
-    sheet["J" + row_count] = loss
-    sheet["K" + row_count] = tp
-    sheet["L" + row_count] = fp
-    sheet["M" + row_count] = tn
-    sheet["N" + row_count] = fn
-    sheet["O" + row_count] = invalid_rate
-    workbook.save("experiment_lm_same_magnitude_virtual_hash.xlsx")
+    # sheet["F" + row_count] = iters
+    sheet["F" + row_count] = optimizer
+    sheet["G" + row_count] = pipeline_virtual_gpus
+    sheet["H" + row_count] = perplexity
+    sheet["I" + row_count] = loss
+    sheet["J" + row_count] = tp
+    sheet["K" + row_count] = fp
+    sheet["L" + row_count] = tn
+    sheet["M" + row_count] = fn
+    sheet["N" + row_count] = invalid_rate
+    workbook.save("experiment_lm_same_magnitude_virtual_redundant.xlsx")
 
 def writetoxlsx_bert(task_name, model, epoch, 
                 forward_attack, forward_attack_rate,
@@ -114,8 +114,7 @@ def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, e
         if epoch == args.n_epochs - 1:
             data = {
                 "pp_mode": args.pp_mode,
-                "pipeline_virtual_gpus": args.pipeline_virtual_gpus,
-                "forward_attack_rate": args.forward_attack_rate,
+                "args": vars(args),
                 "results": pipeline.results,
                 "epoch_metrics": pipeline.epoch_metrics,
                 "sample_error_times": pipeline.sample_error_times
@@ -128,7 +127,7 @@ def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, e
                         # args.distance,
                         # args.alpha,
                         # args.history_length, args.top_n,
-                        args.num_iters,
+                        # args.num_iters,
                         args.optimizer, args.pipeline_virtual_gpus,
                         result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"],
                         tp, fp, tn, fn,
