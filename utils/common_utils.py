@@ -8,10 +8,10 @@ from communication.comm_utils import get_pipeline_parallel_rank
 def calculate_metrics(true_labels, predicted_labels):
     assert len(true_labels) == len(predicted_labels)
     labels_length = len(true_labels)
-    tp = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 1 and p == 1]) / labels_length
-    fp = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 0 and p == 1]) / labels_length
-    tn = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 0 and p == 0]) / labels_length
-    fn = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 1 and p == 0]) / labels_length
+    tp = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 1 and p == 1]) / labels_length if labels_length else 0
+    fp = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 0 and p == 1]) / labels_length if labels_length else 0
+    tn = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 0 and p == 0]) / labels_length if labels_length else 0
+    fn = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 1 and p == 0]) / labels_length if labels_length else 0
     return tp, fp, tn, fn
 
 def save_result(data):

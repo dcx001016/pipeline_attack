@@ -1,10 +1,11 @@
 from .dist_gpipe_pipeline_async import GpipeAsync
-from .dist_pipeline_async_virtual import VirtualAsync
-from .dist_bamboo_pipeline_async_virtual import BambooVirtualAsync
+from .dist_pipeline_async import VirtualAsync
+from .dist_bamboo_pipeline_async import BambooVirtualAsync
 from .dist_pipeline_async_key_value import VirtualKeyValueAsync
 from .dist_pipeline_async_key_value_soft import VirtualKeyValueSoftAsync
 from .dist_pipeline_async_hash import VirtualHashAsync
-from .dist_pipeline_async_redundant_virtual import RedundantVirtualAsync
+from .dist_pipeline_async_redundant import RedundantVirtualAsync
+from .dist_pipeline_async_skip_layer import SkipLayerVirtualAsync
 from modules.dist_deberta_pp_module import *
 
 def get_pp_module_virtual(args, config, device):
@@ -20,6 +21,8 @@ def get_pp_module_virtual(args, config, device):
         return VirtualHashAsync(args, config, device)
     elif args.pp_mode == 'gpipe-redundant':
         return RedundantVirtualAsync(args, config, device)
+    elif args.pp_mode == 'gpipe-skip_layer':
+        return SkipLayerVirtualAsync(args, config, device)
     else:
         print("Not recognize this pipeline parallel mode.")
         assert False

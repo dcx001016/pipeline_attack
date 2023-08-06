@@ -34,13 +34,14 @@ def writetoxlsx_lm(task_name, model, epoch,
                 # distance,
                 # alpha,
                 # history_length, top_n,
-                # iters,
+                iters,
                 optimizer, pipeline_virtual_gpus,
                 perplexity, loss,
-                tp, fp, tn, fn,
-                invalid_rate):
+                # tp, fp, tn, fn,
+                # invalid_rate
+                ):
 
-    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_redundant.xlsx")
+    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_skip_layer.xlsx")
 
     sheet = workbook.active
 
@@ -53,17 +54,17 @@ def writetoxlsx_lm(task_name, model, epoch,
     # sheet["F" + row_count] = distance
     # sheet["G" + row_count] = history_length
     # sheet["H" + row_count] = top_n
-    # sheet["F" + row_count] = iters
-    sheet["F" + row_count] = optimizer
-    sheet["G" + row_count] = pipeline_virtual_gpus
-    sheet["H" + row_count] = perplexity
-    sheet["I" + row_count] = loss
-    sheet["J" + row_count] = tp
-    sheet["K" + row_count] = fp
-    sheet["L" + row_count] = tn
-    sheet["M" + row_count] = fn
-    sheet["N" + row_count] = invalid_rate
-    workbook.save("experiment_lm_same_magnitude_virtual_redundant.xlsx")
+    sheet["F" + row_count] = iters
+    sheet["G" + row_count] = optimizer
+    sheet["H" + row_count] = pipeline_virtual_gpus
+    sheet["I" + row_count] = perplexity
+    sheet["J" + row_count] = loss
+    # sheet["J" + row_count] = tp
+    # sheet["K" + row_count] = fp
+    # sheet["L" + row_count] = tn
+    # sheet["M" + row_count] = fn
+    # sheet["N" + row_count] = invalid_rate
+    workbook.save("experiment_lm_same_magnitude_virtual_skip_layer.xlsx")
 
 def writetoxlsx_bert(task_name, model, epoch, 
                 forward_attack, forward_attack_rate,
@@ -121,17 +122,18 @@ def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, e
             }
             save_result(data)
         if args.write_xlsx and epoch == args.n_epochs - 1:
-            tp, fp, tn, fn = calculate_metrics(pipeline.global_attack, pipeline.global_invalid)
+            # tp, fp, tn, fn = calculate_metrics(pipeline.global_attack, pipeline.global_invalid)
             writetoxlsx_lm(args.task_name, args.model_name, args.n_epochs,
                         args.forward_attack, args.forward_attack_rate,
                         # args.distance,
                         # args.alpha,
                         # args.history_length, args.top_n,
-                        # args.num_iters,
+                        args.num_iters,
                         args.optimizer, args.pipeline_virtual_gpus,
                         result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"],
-                        tp, fp, tn, fn,
-                        pipeline.get_invalid_rate())
+                        # tp, fp, tn, fn,
+                        # pipeline.get_invalid_rate()
+                        )
         if args.wandb and epoch == args.n_epochs - 1:
             wandb.config.result = result
     else:

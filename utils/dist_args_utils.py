@@ -22,7 +22,7 @@ def add_torch_distributed_arguments(parser):
                         help='data-group-size (default: 1)')
     parser.add_argument('--pipeline-virtual-gpus', type=int, default=6, metavar='D',
                         help='pipeline-virtual-gpus (default: 6)')
-    parser.add_argument('--rank', type=int, default=1, metavar='N',
+    parser.add_argument('--rank', type=int, default=0, metavar='N',
                         help='rank of the node')
     
 
@@ -64,7 +64,7 @@ def add_training_hyper_parameter_arguments(parser):
                         help='-')
     parser.add_argument('--alpha', type=float, default=1.0, metavar='N',
                         help='-')
-    parser.add_argument('--dropout', default=True, type=lambda x: (str(x).lower() == 'true'),
+    parser.add_argument('--dropout', default=False, type=lambda x: (str(x).lower() == 'true'),
                         help='-')
     parser.add_argument('--distance', type=str, default="l2", metavar='N',
                         help='-')
@@ -111,7 +111,7 @@ def add_mixed_precision_arguments(parser):
 
     
 def add_parallel_schema_arguments(parser):
-    parser.add_argument('--pp-mode', type=str, default='gpipe-hash', metavar='S',
+    parser.add_argument('--pp-mode', type=str, default='gpipe-skip_layer', metavar='S',
                         help='use which pipeline parallel mode: gpipe or 1f1b.')
     parser.add_argument('--dp-mode', type=str, default='allreduce', metavar='S',
                         help='use which data parallel mode: allreduce.')
@@ -120,12 +120,12 @@ def add_parallel_schema_arguments(parser):
     
 def add_attack_schema_arguments(parser):
     parser.add_argument('--forward-attack', 
-                        type=lambda x: x.lower()=='true', default=False, metavar='S',
+                        type=lambda x: x.lower()=='true', default=True, metavar='S',
                         help='load pretrained model or not.')
     parser.add_argument('--backward-attack', 
                         type=lambda x: x.lower()=='true', default=False, metavar='S',
                         help='load pretrained model or not.')
-    parser.add_argument('--forward-attack-rate', type=float, default=0.1, metavar='N',
+    parser.add_argument('--forward-attack-rate', type=float, default=0.5, metavar='N',
                         help='-')
     parser.add_argument('--backward-attack-rate', type=float, default=0, metavar='N',
                         help='-')

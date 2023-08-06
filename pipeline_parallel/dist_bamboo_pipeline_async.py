@@ -655,7 +655,7 @@ class BambooVirtualAsync:
             for i in range(len(self.virtual_gpus)):
                 self.virtual_gpus[i].model.eval()
                 if hasattr(self.virtual_gpus[i], "redundant_model"):
-                    self.virtual_gpus[i].redundant_model.train()
+                    self.virtual_gpus[i].redundant_model.eval()
 
     def infer_stage(self, input_data=None, aux_input_data=None, 
                     labels=None, pred_func=None):
