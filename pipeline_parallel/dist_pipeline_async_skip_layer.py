@@ -612,6 +612,7 @@ class SkipLayerVirtualAsync:
             self.comm.barrier()
 
             if self.error_stage != -1:
+                self.invalid_times += 1
                 error_stages = [stage_index for stage_index in range(max(1, int(self.error_stage) - 1), min(self.pipeline_virtual_gpus - 2, int(self.error_stage) + 1))]
                 frozen_stages = [stage_index for stage_index in range(max(1, int(self.error_stage) - 2), min(self.pipeline_virtual_gpus - 2, int(self.error_stage) + 1))]
                 outputs = self.forward_stage(input_, aux_input_data=aux_input_data, error_stages=error_stages)
@@ -636,6 +637,7 @@ class SkipLayerVirtualAsync:
         print("Rank {} node whole iteration takes {:3.2f}s".format(self.global_rank, iter_time))
         print("-------------------------------------------")
         self.global_step += 1
+        self.total_times += 1
         return iter_time, outputs[0], grad
     
     def change_mode(self, mode="train"):

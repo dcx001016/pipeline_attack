@@ -38,7 +38,7 @@ def writetoxlsx_lm(task_name, model, epoch,
                 optimizer, pipeline_virtual_gpus,
                 perplexity, loss,
                 # tp, fp, tn, fn,
-                # invalid_rate
+                invalid_rate
                 ):
 
     workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_skip_layer.xlsx")
@@ -63,7 +63,7 @@ def writetoxlsx_lm(task_name, model, epoch,
     # sheet["K" + row_count] = fp
     # sheet["L" + row_count] = tn
     # sheet["M" + row_count] = fn
-    # sheet["N" + row_count] = invalid_rate
+    sheet["K" + row_count] = invalid_rate
     workbook.save("experiment_lm_same_magnitude_virtual_skip_layer.xlsx")
 
 def writetoxlsx_bert(task_name, model, epoch, 
@@ -132,7 +132,7 @@ def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, e
                         args.optimizer, args.pipeline_virtual_gpus,
                         result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"],
                         # tp, fp, tn, fn,
-                        # pipeline.get_invalid_rate()
+                        pipeline.get_invalid_rate()
                         )
         if args.wandb and epoch == args.n_epochs - 1:
             wandb.config.result = result
