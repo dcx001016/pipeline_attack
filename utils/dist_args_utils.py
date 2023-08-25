@@ -44,9 +44,9 @@ def add_task_arguments(parser):
 def add_model_arguments(parser):
     parser.add_argument('--seq-length', type=int, default=1024, metavar='N',
                         help='-')
-    parser.add_argument('--embedding-dim', type=int, default=768, metavar='N',
+    parser.add_argument('--embedding-dim', type=int, default=1024, metavar='N',
                         help='-')
-    parser.add_argument('--num-layers', type=int, default=6, metavar='N',
+    parser.add_argument('--num-layers', type=int, default=12, metavar='N',
                         help='-')
     parser.add_argument('--num-heads', type=int, default=25, metavar='N',
                         help='-')
@@ -133,6 +133,12 @@ def add_attack_schema_arguments(parser):
                         help='-')
     parser.add_argument('--top-n', type=int, default=1, metavar='N',
                         help='-')
+    parser.add_argument('--do-valid', 
+                        type=lambda x: x.lower()=='true', default=True, metavar='S',
+                        help='load pretrained model or not.')
+    parser.add_argument('--use-center-server', 
+                        type=lambda x: x.lower()=='true', default=True, metavar='S',
+                        help='load pretrained model or not.')
     
 def get_model_arguments_str(args):
     return '_l' + str(args.seq_length) + '_m' + str(args.embedding_dim)

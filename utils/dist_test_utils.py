@@ -34,14 +34,16 @@ def writetoxlsx_lm(task_name, model, epoch,
                 # distance,
                 # alpha,
                 # history_length, top_n,
-                iters,
+                do_valid,
+                # iters,
                 optimizer, pipeline_virtual_gpus,
                 perplexity, loss,
                 # tp, fp, tn, fn,
-                invalid_rate
+                # invalid_rate
                 ):
 
-    workbook = load_workbook(filename="experiment_lm_same_magnitude_virtual_skip_layer.xlsx")
+    file_name = "experiment_3*3.xlsx"
+    workbook = load_workbook(filename=file_name)
 
     sheet = workbook.active
 
@@ -51,10 +53,10 @@ def writetoxlsx_lm(task_name, model, epoch,
     sheet["C" + row_count] = epoch
     sheet["D" + row_count] = forward_attack
     sheet["E" + row_count] = forward_attack_rate
-    # sheet["F" + row_count] = distance
+    sheet["F" + row_count] = do_valid
     # sheet["G" + row_count] = history_length
     # sheet["H" + row_count] = top_n
-    sheet["F" + row_count] = iters
+    # sheet["G" + row_count] = iters
     sheet["G" + row_count] = optimizer
     sheet["H" + row_count] = pipeline_virtual_gpus
     sheet["I" + row_count] = perplexity
@@ -63,8 +65,8 @@ def writetoxlsx_lm(task_name, model, epoch,
     # sheet["K" + row_count] = fp
     # sheet["L" + row_count] = tn
     # sheet["M" + row_count] = fn
-    sheet["K" + row_count] = invalid_rate
-    workbook.save("experiment_lm_same_magnitude_virtual_skip_layer.xlsx")
+    # sheet["L" + row_count] = invalid_rate
+    workbook.save(file_name)
 
 def writetoxlsx_bert(task_name, model, epoch, 
                 forward_attack, forward_attack_rate,
@@ -125,14 +127,15 @@ def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, e
             # tp, fp, tn, fn = calculate_metrics(pipeline.global_attack, pipeline.global_invalid)
             writetoxlsx_lm(args.task_name, args.model_name, args.n_epochs,
                         args.forward_attack, args.forward_attack_rate,
+                        args.do_valid,
                         # args.distance,
                         # args.alpha,
                         # args.history_length, args.top_n,
-                        args.num_iters,
+                        # args.num_iters,
                         args.optimizer, args.pipeline_virtual_gpus,
                         result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"],
                         # tp, fp, tn, fn,
-                        pipeline.get_invalid_rate()
+                        # pipeline.get_invalid_rate()
                         )
         if args.wandb and epoch == args.n_epochs - 1:
             wandb.config.result = result

@@ -38,7 +38,7 @@ class VirtualGPU:
         self.pipeline_virtual_gpus = args.pipeline_virtual_gpus
         self.virtual_rank = virtual_rank
         self.micro_batch_num = micro_batch_num
-        self.redundant_virtual_rank = virtual_rank - 1 if virtual_rank else args.pipeline_virtual_gpus - 1
+        self.do_valid = args.do_valid
 
         self.device = device
 
@@ -66,27 +66,32 @@ class VirtualGPU:
                             requires_grad=False, device=self.device, dtype=self.dtype
                            ) for _ in range(self.micro_batch_num)
             ]
-
-        if self.redundant_virtual_rank != 0 and self.redundant_virtual_rank != self.pipeline_virtual_gpus - 1:
-            self.redundant_input_micro_batches = [
-                torch.zeros((args.micro_batch_size, args.seq_length, args.embedding_dim),
-                            requires_grad=True, device=self.device, dtype=self.dtype
-                           ) for _ in range(micro_batch_num)
-            ]
-        else:
-            self.redundant_input_micro_batches = None
+        
         self.output_micro_batches = [None] * micro_batch_num
 
-        if self.redundant_virtual_rank != 0 and self.redundant_virtual_rank != self.pipeline_virtual_gpus - 1:
-            self.redundant_model = _StageMiddle(args, config, device)
-            self.redundant_cached_output_micro_batches = [None] * micro_batch_num
+        if self.do_valid:
+            self.redundant_virtual_rank = virtual_rank - 1 if virtual_rank else args.pipeline_virtual_gpus - 1
 
-        if self.use_fp16:
-            self.model.half()
-            self.redundant_model.half() if self.redundant_virtual_rank != 0 and self.redundant_virtual_rank != self.pipeline_virtual_gpus - 1 else None
+            if self.redundant_virtual_rank != 0 and self.redundant_virtual_rank != self.pipeline_virtual_gpus - 1:
+                self.redundant_input_micro_batches = [
+                    torch.zeros((args.micro_batch_size, args.seq_length, args.embedding_dim),
+                                requires_grad=True, device=self.device, dtype=self.dtype
+                            ) for _ in range(micro_batch_num)
+                ]
+            else:
+                self.redundant_input_micro_batches = None
+
+            if self.redundant_virtual_rank != 0 and self.redundant_virtual_rank != self.pipeline_virtual_gpus - 1:
+                self.redundant_model = _StageMiddle(args, config, device)
+                self.redundant_cached_output_micro_batches = [None] * micro_batch_num
+
+            if self.use_fp16:
+                self.model.half()
+                if self.do_valid:
+                    self.redundant_model.half() if self.redundant_virtual_rank != 0 and self.redundant_virtual_rank != self.pipeline_virtual_gpus - 1 else None
 
     def valid(self, aux_input_data, index):
-        if not self.model.training or self.redundant_virtual_rank == self.pipeline_virtual_gpus - 1 or self.redundant_virtual_rank == 0:
+        if not self.do_valid or not self.model.training or self.redundant_virtual_rank == self.pipeline_virtual_gpus - 1 or self.redundant_virtual_rank == 0:
             return True
             
         self.forward(aux_input_data, index, None, True)
@@ -154,6 +159,7 @@ class SkipLayerVirtualAsync:
         self.pp_rank = get_pipeline_parallel_rank()
         self.pre_node_rank = self.pp_rank - 1
         self.post_node_rank = self.pp_rank + 1 if self.pp_rank != self.pipeline_group_size - 1 else -1
+        self.do_valid = args.do_valid
 
         self.comm = get_pipeline_parallel_comm()
         self.gradient_accumulate_step = args.gradient_accumulate_step
@@ -170,6 +176,7 @@ class SkipLayerVirtualAsync:
 
         self.forward_attack_rate = args.forward_attack_rate
         self.backward_attack_rate = args.backward_attack_rate
+        self.use_center_server = args.use_center_server
         self.invalid_times = 0
         self.total_times = 0
 
@@ -236,26 +243,29 @@ class SkipLayerVirtualAsync:
             tmp_optimizers = [create_optimizer(self.virtual_gpus[i].model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)]
             self.optimizers = {self.virtual_gpus[i].virtual_rank: get_fp16_optimizer(args, tmp_optimizers[i], device) for i in range(args.virtual_gpus)}
             self.schedulers = {self.virtual_gpus[i].virtual_rank: get_linear_schedule_with_warmup(tmp_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)}
-            if self.pp_rank != 0:
-                redundant_tmp_optimizers = [create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)]
-                self.redundant_optimizers = {self.virtual_gpus[i].redundant_virtual_rank: get_fp16_optimizer(args, redundant_tmp_optimizers[i], device) for i in range(args.virtual_gpus)}
-                self.redundant_schedulers = {self.virtual_gpus[i].redundant_virtual_rank: get_linear_schedule_with_warmup(redundant_tmp_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)}
-            else:
-                redundant_tmp_optimizers = {self.virtual_gpus[i].redundant_virtual_rank: create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(2, args.virtual_gpus)}
-                self.redundant_optimizers = {k: get_fp16_optimizer(args, redundant_tmp_optimizers[k], device) for k in redundant_tmp_optimizers}
-                self.redundant_schedulers = {k: get_linear_schedule_with_warmup(redundant_tmp_optimizers[k], args.warmup_steps, args.total_steps, ) for k in self.redundant_optimizers}
+            if self.do_valid:
+                if self.pp_rank != 0:
+                    redundant_tmp_optimizers = [create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)]
+                    self.redundant_optimizers = {self.virtual_gpus[i].redundant_virtual_rank: get_fp16_optimizer(args, redundant_tmp_optimizers[i], device) for i in range(args.virtual_gpus)}
+                    self.redundant_schedulers = {self.virtual_gpus[i].redundant_virtual_rank: get_linear_schedule_with_warmup(redundant_tmp_optimizers[i], args.warmup_steps, args.total_steps, ) for i in range(args.virtual_gpus)}
+                else:
+                    redundant_tmp_optimizers = {self.virtual_gpus[i].redundant_virtual_rank: create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(2, args.virtual_gpus)}
+                    self.redundant_optimizers = {k: get_fp16_optimizer(args, redundant_tmp_optimizers[k], device) for k in redundant_tmp_optimizers}
+                    self.redundant_schedulers = {k: get_linear_schedule_with_warmup(redundant_tmp_optimizers[k], args.warmup_steps, args.total_steps, ) for k in self.redundant_optimizers}
         else:
             self.optimizers = {self.virtual_gpus[i].virtual_rank: create_optimizer(self.virtual_gpus[i].model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)}
             self.schedulers = {k: get_linear_schedule_with_warmup(self.optimizers[k], args.warmup_steps, args.total_steps, ) for k in self.optimizers}
-            if self.pp_rank != 0:
-                self.redundant_optimizers = {self.virtual_gpus[i].redundant_virtual_rank: create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)}
-                self.redundant_schedulers = {k: get_linear_schedule_with_warmup(self.redundant_optimizers[k], args.warmup_steps, args.total_steps, ) for k in self.redundant_optimizers}
-            else:
-                self.redundant_optimizers = {self.virtual_gpus[i].redundant_virtual_rank: create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(2, args.virtual_gpus)}
-                self.redundant_schedulers = {k: get_linear_schedule_with_warmup(self.redundant_optimizers[k], args.warmup_steps, args.total_steps, ) for k in self.redundant_optimizers}
+            if self.do_valid:
+                if self.pp_rank != 0:
+                    self.redundant_optimizers = {self.virtual_gpus[i].redundant_virtual_rank: create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(args.virtual_gpus)}
+                    self.redundant_schedulers = {k: get_linear_schedule_with_warmup(self.redundant_optimizers[k], args.warmup_steps, args.total_steps, ) for k in self.redundant_optimizers}
+                else:
+                    self.redundant_optimizers = {self.virtual_gpus[i].redundant_virtual_rank: create_optimizer(self.virtual_gpus[i].redundant_model, learning_rate=args.lr, optim=args.optimizer) for i in range(2, args.virtual_gpus)}
+                    self.redundant_schedulers = {k: get_linear_schedule_with_warmup(self.redundant_optimizers[k], args.warmup_steps, args.total_steps, ) for k in self.redundant_optimizers}
 
         self.global_step = 0
-        self.get_redundant_models(args.model_name, args.virtual_num_layers)
+        if self.do_valid:
+            self.get_redundant_models(args.model_name, args.virtual_num_layers)
 
     def _compute_micro_batch_size(self):
         micro_batch_float_num = self.micro_batch_size * self.seq_length * self.embedding_dim
@@ -277,19 +287,20 @@ class SkipLayerVirtualAsync:
                     if input_micro_batch.grad is not None:
                         input_micro_batch.grad.zero_()
             
-            if gpu.redundant_input_micro_batches:
-                for input_micro_batch in gpu.redundant_input_micro_batches:
-                    if input_micro_batch.grad is not None:
-                        input_micro_batch.grad.zero_()
+            if self.do_valid:
+                if gpu.redundant_input_micro_batches:
+                    for input_micro_batch in gpu.redundant_input_micro_batches:
+                        if input_micro_batch.grad is not None:
+                            input_micro_batch.grad.zero_()
 
     def get_metrics(self):
         return
 
     def forward_attack(self, input: torch.Tensor):
-        if self.virtual_gpus[0].model.training:
-            input_perturbation = torch.normal(mean=float(input.mean()), std=float(input.std()), size=tuple(input.shape), device=input.device)
-            input.data.add_(input_perturbation)
-
+        input_perturbation = torch.normal(mean=float(input.mean()), std=float(input.std()), size=tuple(input.shape), device=input.device)
+        # input.data.add_(input_perturbation)
+        input.data.mul_(-1)
+        # input.data.copy_(input_perturbation)
         return input
 
     def virtual_forward(self, aux_input_data, index: int, input_ids_micro_batch=None, error_stages=None, last_index=-1, last2index=-1):
@@ -300,15 +311,16 @@ class SkipLayerVirtualAsync:
                 self.virtual_gpus[i].input_micro_batches[index].data.copy_(self.center_server.get_data(last_index, index))
             if self.virtual_gpus[i].virtual_rank != 0 and self.virtual_gpus[i].virtual_rank != 1:
                 if error_stages is None:
-                    self.virtual_gpus[i].redundant_input_micro_batches[index].data.copy_(self.center_server.get_data(last2index, index))
-                    valid = self.virtual_gpus[i].valid(aux_input_data, index)
-                    if not valid:
-                        return torch.full_like(self.virtual_gpus[i].input_micro_batches[index], self.virtual_gpus[i].virtual_rank, dtype=self.dtype, device=self.device), torch.full_like(self.virtual_gpus[i].input_micro_batches[index], self.virtual_gpus[i].virtual_rank, dtype=self.dtype, device=self.device)
+                    if self.do_valid:
+                        self.virtual_gpus[i].redundant_input_micro_batches[index].data.copy_(self.center_server.get_data(last2index, index))
+                        valid = self.virtual_gpus[i].valid(aux_input_data, index)
+                        if not valid:
+                            return torch.full_like(self.virtual_gpus[i].input_micro_batches[index], self.virtual_gpus[i].virtual_rank, dtype=self.dtype, device=self.device), torch.full_like(self.virtual_gpus[i].input_micro_batches[index], self.virtual_gpus[i].virtual_rank, dtype=self.dtype, device=self.device)
                 elif self.virtual_gpus[i].redundant_virtual_rank not in error_stages:
                     self.virtual_gpus[i].redundant_input_micro_batches[index].data.copy_(self.center_server.get_data(last2index, index))
                     self.virtual_gpus[i].forward(aux_input_data, index, None, True)
             tmp_output = self.virtual_gpus[i].forward(aux_input_data, index, input_ids_micro_batch)
-            if self.virtual_gpus[i].virtual_rank == self.malicious_stage:
+            if self.virtual_gpus[i].model.training and self.virtual_gpus[i].virtual_rank == self.malicious_stage:
                 tmp_output = self.forward_attack(tmp_output)
             self.center_server.set_data(self.virtual_gpus[i].virtual_rank, index, tmp_output)
             if last_index != -1:
@@ -328,8 +340,9 @@ class SkipLayerVirtualAsync:
             else:
                 self.virtual_gpus[i].backward(index)
             
-            if error_stages is None or self.virtual_gpus[i].redundant_virtual_rank not in error_stages:
-                self.virtual_gpus[i].backward(index, True)
+            if self.do_valid:
+                if error_stages is None or self.virtual_gpus[i].redundant_virtual_rank not in error_stages:
+                    self.virtual_gpus[i].backward(index, True)
             last_index = i
             for j in reversed(range(0, i)):
                 if error_stages is None or self.virtual_gpus[j].virtual_rank not in error_stages:
@@ -574,10 +587,11 @@ class SkipLayerVirtualAsync:
                 if k not in frozen_stages:
                     self.optimizers[k].step()
                     self.schedulers[k].step()
-            for k in self.redundant_optimizers:
-                if k not in frozen_stages:
-                    self.redundant_optimizers[k].step()
-                    self.redundant_schedulers[k].step()
+            if self.do_valid:
+                for k in self.redundant_optimizers:
+                    if k not in frozen_stages:
+                        self.redundant_optimizers[k].step()
+                        self.redundant_schedulers[k].step()
 
     def sgd_iter(self, input_=None, target=None, sample_ids=None, 
                  aux_input_data=None, loss_func=torch.nn.functional.cross_entropy,
@@ -587,8 +601,9 @@ class SkipLayerVirtualAsync:
         self.zero_input_grad()
         for i in self.optimizers:
             self.optimizers[i].zero_grad(set_to_none=False)
-        for i in self.redundant_optimizers:
-            self.redundant_optimizers[i].zero_grad(set_to_none=False)
+        if self.do_valid:
+            for i in self.redundant_optimizers:
+                self.redundant_optimizers[i].zero_grad(set_to_none=False)
 
         for step in range(self.gradient_accumulate_step):
             self.malicious_stage = torch.tensor(-1, dtype=torch.int, device=self.device)
@@ -613,8 +628,12 @@ class SkipLayerVirtualAsync:
 
             if self.error_stage != -1:
                 self.invalid_times += 1
-                error_stages = [stage_index for stage_index in range(max(1, int(self.error_stage) - 1), min(self.pipeline_virtual_gpus - 2, int(self.error_stage) + 1))]
-                frozen_stages = [stage_index for stage_index in range(max(1, int(self.error_stage) - 2), min(self.pipeline_virtual_gpus - 2, int(self.error_stage) + 1))]
+                if self.use_center_server:
+                    error_stages = [stage_index for stage_index in range(max(1, int(self.error_stage) - 1), min(self.pipeline_virtual_gpus - 1, int(self.error_stage) + 1))]
+                    frozen_stages = [stage_index for stage_index in range(max(1, int(self.error_stage) - 2), min(self.pipeline_virtual_gpus - 1, int(self.error_stage) + 1))]
+                else:
+                    error_stages = [stage_index for stage_index in range(max(1, int(self.error_stage) - 2), min(self.pipeline_virtual_gpus - 1, int(self.error_stage) + 1))]
+                    frozen_stages = [stage_index for stage_index in range(max(1, int(self.error_stage) - 3), min(self.pipeline_virtual_gpus - 1, int(self.error_stage) + 1))]
                 outputs = self.forward_stage(input_, aux_input_data=aux_input_data, error_stages=error_stages)
             else:
                 error_stages = None

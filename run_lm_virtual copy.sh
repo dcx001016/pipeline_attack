@@ -1,5 +1,5 @@
-ARGS="--model-name checkpoints/gpt2-medium \
---tokenizer-name gpt2-medium \
+ARGS="--model-name checkpoints/facebook/opt-350m \
+--tokenizer-name checkpoints/facebook/opt-350m \
 --load-pretrained-model true \
 --task-name wikitext --n-epochs 5 --warmup-epochs 1 \
 --num-layers 12 --num-heads 16 --embedding-dim 1024 \
@@ -10,10 +10,8 @@ ARGS="--model-name checkpoints/gpt2-medium \
 --backward-compress-method none \
 --backward-bits 8 \
 --dist-url tcp://127.0.0.1:9034 \
---alpha 1.0 --dropout false \
+--dropout false \
 --world-size 2 --pipeline-group-size 2 --pipeline-virtual-gpus 6 \
---history-length 100 --top-n 11 \
---distance cos \
 --pp-mode gpipe-skip_layer --profiling no-profiling --do-evaluation true \
 --forward-attack true --forward-attack-rate 0.5 \
 --backward-attack false --backward-attack-rate 0.3 \
@@ -21,8 +19,8 @@ ARGS="--model-name checkpoints/gpt2-medium \
 --wandb false --write-xlsx true"
 
 (trap 'kill 0' SIGINT; \
-python dist_lm_runner_virtual.py $(echo ${ARGS}) --cuda-id 0 --rank 0 \
+python dist_opt_runner_virtual.py $(echo ${ARGS}) --cuda-id 0 --rank 0 \
     & \
-python dist_lm_runner_virtual.py $(echo ${ARGS}) --cuda-id 1 --rank 1 \
+python dist_opt_runner_virtual.py $(echo ${ARGS}) --cuda-id 1 --rank 1 \
     ; \
 wait)

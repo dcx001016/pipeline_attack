@@ -15,7 +15,7 @@ def calculate_metrics(true_labels, predicted_labels):
     return tp, fp, tn, fn
 
 def save_result(data):
-    filename = "result/result_%s.json" % datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+    filename = "result2/result_%s.json" % datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
     with open(filename, "w") as f:
         json.dump(data, f)
 
