@@ -370,20 +370,6 @@ class GPTLMHead(nn.Module):
             self.project_out = None
         
         self.lm_head = nn.Linear(config.word_embed_proj_dim, config.vocab_size, bias=False, device=device)
-        
-    @classmethod
-    def from_pretrained(cls, model_path, config=None):
-        if config is None:
-            config = GPTConfig.from_pretrained(model_path)
-        # module = cls(config).eval()
-        module = torch.nn.utils.skip_init(cls, config).eval() # fast init
-        try:
-            module.load_state_dict(torch.load(os.path.join(
-                model_path, 'pytorch_lm_head.pt',
-            )))
-        except:
-            print('Cannot load from <model_name>. The model is randomly initialized.')
-        return module
 
     def forward(self, x, input_ids=None):
         if self.final_layer_norm is not None:

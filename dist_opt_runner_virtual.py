@@ -6,7 +6,7 @@ import numpy as np
 import wandb
 
 from attack.attack import *
-from modules.gpt_modules import GPTConfig
+from transformers import AutoConfig
 from modules.tokenizer import *
 from communication.comm_utils import *
 from utils.dist_args_utils import *
@@ -102,7 +102,7 @@ def main():
                    save_code=False)
         init_wandb_config(args)
 
-    config = GPTConfig.from_pretrained(args.model_name)
+    config = AutoConfig.from_pretrained(args.model_name)
 
     tokenizer = build_tokenizer(args)
     tokenizer.model_max_length = args.seq_length

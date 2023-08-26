@@ -8,8 +8,10 @@ from communication.comm_utils import *
 
     
 def get_arxiv21_train_data_loader(args, tokenizer, num_workers=0):
-    
-    data = load_dataset("ds3lab/ac-sgd-arxiv21", split="train")
+    if os.path.exists("datasets/train/arxiv21"):
+        data = load_from_disk("datasets/train/arxiv21")
+    else:
+        data = load_dataset("ds3lab/ac-sgd-arxiv21", split="train")
     encodings = tokenizer("\n\n".join(
         [t.strip() for t in data["abstract"]]
     ), return_tensors="pt")
@@ -60,8 +62,10 @@ def get_arxiv21_train_data_loader(args, tokenizer, num_workers=0):
 
     
 def get_arxiv21_test_data_loader(args, tokenizer, num_workers=0):
-    
-    data = load_dataset("ds3lab/ac-sgd-arxiv21", split="test")
+    if os.path.exists("datasets/test/arxiv21"):
+        data = load_from_disk("datasets/test/arxiv21")
+    else:
+        data = load_dataset("ds3lab/ac-sgd-arxiv21", split="test")
     encodings = tokenizer("\n\n".join(
         [t.strip() for t in data["abstract"]]
     ), return_tensors="pt")

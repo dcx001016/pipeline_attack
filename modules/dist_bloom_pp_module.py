@@ -1,8 +1,8 @@
 from torch import nn
-from .opt_module import GPTEmbeddings, GPTBlock, GPTLMHead
+from .bloom_module import GPTEmbeddings, GPTBlock, GPTLMHead
 
 
-class OPTStageBase(nn.Module):
+class BloomStageBase(nn.Module):
     def __init__(self, args, config):
         super().__init__()
         self._to_cpu = False # (args.dist_backend == "gloo")
@@ -19,7 +19,7 @@ class OPTStageBase(nn.Module):
         return GPTBlock(self.config) # TODO: checkpoint
 
 
-class OPTStageFirst(OPTStageBase):
+class BloomStageFirst(BloomStageBase):
     def __init__(self, args, config, device):
         super().__init__(args, config)
         self.device = device
@@ -33,7 +33,7 @@ class OPTStageFirst(OPTStageBase):
         return out.cpu() if self._to_cpu else out
 
 
-class OPTStageMiddle(OPTStageBase):
+class BloomStageMiddle(BloomStageBase):
     def __init__(self, args, config, device):
         super().__init__(args, config)
         self.device = device
@@ -46,8 +46,7 @@ class OPTStageMiddle(OPTStageBase):
         out = self.model(x.to(self.device)) if self._to_cpu else self.model(x)
         return out.cpu() if self._to_cpu else out
 
-
-class OPTStageLast(OPTStageBase):
+class BloomStageLast(BloomStageBase):
     def __init__(self, args, config, device):
         super().__init__(args, config)
         self.device = device

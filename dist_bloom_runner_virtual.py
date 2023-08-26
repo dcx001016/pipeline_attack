@@ -7,7 +7,7 @@ import numpy as np
 import wandb
 
 from attack.attack import *
-from modules.gpt_modules import GPTConfig
+from transformers import AutoConfig
 from modules.tokenizer import *
 from communication.comm_utils import *
 from utils.dist_args_utils import *
@@ -16,19 +16,25 @@ from utils.dist_test_utils import *
 from utils.common_utils import *
 from tasks.data_loaders.arxiv21 import *
 from tasks.data_loaders.wikitext import *
-from pipeline_parallel.dist_pp_utils import get_pp_module
+from pipeline_parallel.dist_pp_utils import get_bloom_pp_module_virtual
 
 def train_loop(args, pipe, device, train_data_loader, test_data_loader):
-    
+    total_train_time = 0
+    pipe.results = []
     for e in range(args.n_epochs):
-        distributed_train_lm_iter(args, pipe, device, train_data_loader)
-        
+        start_time = time.time()
+        distributed_train_lm_iter_virtual(args, pipe, device, train_data_loader)
+        end_time = time.time()
+        total_train_time += end_time - start_time
+        pipe.get_metrics()
         if test_data_loader is not None and args.do_evaluation:
-            distributed_test_lm_iter(args, pipe, device, test_data_loader, e)
+            distributed_test_lm_iter_virtual(args, pipe, device, test_data_loader, e)
+
+    return total_train_time
 
 def main():
     start_time = time.time()
-    parser = argparse.ArgumentParser(description='Gpipe-GPT2')
+    parser = argparse.ArgumentParser(description='Gpipe-Bloom')
     add_device_arguments(parser)
     add_model_arguments(parser)
     add_task_arguments(parser)
@@ -39,9 +45,9 @@ def main():
     add_mixed_precision_arguments(parser)
     add_attack_schema_arguments(parser)
 
-    parser.add_argument('--model-name', type=str, default='checkpoints/gpt2', metavar='S',
+    parser.add_argument('--model-name', type=str, default='checkpoints/bigscience/bloom-7b1', metavar='S',
                         help='model name or path')
-    parser.add_argument('--tokenizer-name', type=str, default='gpt2', metavar='S',
+    parser.add_argument('--tokenizer-name', type=str, default='checkpoints/bigscience/bloom-7b1', metavar='S',
                         help='tokenizer name or path')
     parser.add_argument('--task-name', type=str, default='wikitext', metavar='S',
                         help='task name')
@@ -92,23 +98,25 @@ def main():
     init_communicators(args)
 
     if args.wandb and get_pipeline_parallel_rank() == args.pipeline_group_size-1:
-        wandb.init(project=f"dist_lm_runner-same_magnitude-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
-                   name=f"forward_attack_rate:{args.forward_attack_rate}--backward_attack_rate:{args.backward_attack_rate}",
+        wandb.init(project=f"dist_bloom_runner-same_magnitude-defense-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
+                   name=f"forward_attack_rate:{args.forward_attack_rate}",
                    save_code=False)
         init_wandb_config(args)
 
-    config = GPTConfig.from_pretrained(args.model_name)
-
-    config.n_layer = args.num_layers
+    config = AutoConfig.from_pretrained(args.model_name)
 
     tokenizer = build_tokenizer(args)
     tokenizer.model_max_length = args.seq_length
-    config.vocab_size = tokenizer.vocab_size
+    # config.vocab_size = tokenizer.vocab_size
     config.bos_token_id = tokenizer.bos_token_id
     config.eos_token_id = tokenizer.eos_token_id
     config.pad_token_id = tokenizer.pad_token_id
+    if not args.dropout:
+        config.attention_dropout = 0
+        config.hidden_dropout = 0
+    
 
-    if args.task_name == 'wikitext':
+    if args.task_name in {'wikitext', 'wiki103'}:
         train_data_loader = get_wikitext_train_data_loader(args, tokenizer)
         test_data_loader = get_wikitext_test_data_loader(args, tokenizer)
     elif args.task_name == 'arxiv21':
@@ -119,82 +127,47 @@ def main():
     
     if args.warmup_steps is None:
         args.warmup_steps = len(train_data_loader)
+    args.num_iters = min(len(train_data_loader), args.num_iters)
     args.total_steps = len(train_data_loader) * args.n_epochs
 
-    use_dp = (args.world_size != args.pipeline_group_size)
-    if use_dp:
-        print("Running ", args.pp_mode, " with data parallel.")
-    else:
-        print("Running ", args.pp_mode, " without data parallel.")
+    print("Running ", args.pp_mode)
 
-    pipe = get_pp_module(args, config, device, use_dp)
+    pipe = get_bloom_pp_module_virtual(args, config, device)
 
     if args.load_pretrained_model:
-        if get_pipeline_parallel_rank() == 0:
-            pipe.model.model[0].load_state_dict(
-                torch.load(f'{args.model_name}/pytorch_embs.pt')
-            )
-            for i in range(len(pipe.model.model)-1):
-                print(i)
-                pipe.model.model[i+1].load_state_dict(
-                    torch.load(f'{args.model_name}/pytorch_{i}.pt')
+        for i in range(len(pipe.virtual_gpus)):
+            if pipe.virtual_gpus[i].virtual_rank == 0:
+                pipe.virtual_gpus[i].model.model[0].load_state_dict(
+                    torch.load(f'{args.model_name}/pytorch_embs.pt')
                 )
-                if i != 0 and i % args.virtual_num_layers == 0:
-                    pipe.model.model[i+1].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
-
-        elif get_pipeline_parallel_rank() == args.pipeline_group_size-1:
-            _i = get_pipeline_parallel_rank() * args.num_layers
-            # skip last classification layer
-            for i in range(len(pipe.model.model)-1):
-                print(i+_i)
-                pipe.model.model[i].load_state_dict(
-                    torch.load(f'{args.model_name}/pytorch_{_i + i}.pt')
+                for j in range(len(pipe.virtual_gpus[i].model.model) - 1):
+                    print(j)
+                    pipe.virtual_gpus[i].model.model[j + 1].load_state_dict(
+                        torch.load(f'{args.model_name}/pytorch_{j}.pt')
+                    )
+            elif pipe.virtual_gpus[i].virtual_rank == args.pipeline_virtual_gpus - 1:
+                _i = pipe.virtual_gpus[i].virtual_rank * args.virtual_num_layers
+                for j in range(len(pipe.virtual_gpus[i].model.model) - 1):
+                    print(j + _i)
+                    pipe.virtual_gpus[i].model.model[j].load_state_dict(
+                        torch.load(f'{args.model_name}/pytorch_{_i + j}.pt')
+                    )
+                pipe.virtual_gpus[i].model.model[-1].load_state_dict(
+                    torch.load(f'{args.model_name}/pytorch_lm_head.pt')
                 )
-                if i % args.virtual_num_layers == 0:
-                    pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
+            else:
+                _i = pipe.virtual_gpus[i].virtual_rank * args.virtual_num_layers
+                for j in range(len(pipe.virtual_gpus[i].model.model)):
+                    print(j + _i)
+                    pipe.virtual_gpus[i].model.model[j].load_state_dict(
+                        torch.load(f'{args.model_name}/pytorch_{_i + j}.pt')
+                    )
 
-            pipe.model.model[-1].load_state_dict(
-                torch.load(f'{args.model_name}/pytorch_lm_head.pt')
-            )
-
-        else:
-            _i = get_pipeline_parallel_rank() * args.num_layers
-            for i in range(len(pipe.model.model)):
-                print(i+_i)
-                pipe.model.model[i].load_state_dict(
-                    torch.load(f'{args.model_name}/pytorch_{_i + i}.pt')
-                )
-                if i % args.virtual_num_layers == 0:
-                    pipe.model.model[i].register_forward_pre_hook(attack_forward_hook(args.forward_attack_rate))
-
-
-    if args.profiling == 'no-profiling':
-        train_loop(args, pipe, device, train_data_loader, test_data_loader)
-    else:
-        prefix = './trace_json/gpt3_' + args.pp_mode
-        if use_dp:
-            prefix = prefix + '_' + args.dp_mode
-        trace_file = prefix + get_learning_arguments_str(args) + get_model_arguments_str(args) + \
-                     get_dist_arguments_str(args) + get_mixed_precision_arguments_str(args) + '_' + \
-                     args.profiling + '_' + args.trace_postfix + '.json'
-        if args.profiling == 'tidy_profiling':
-            try:
-                train_loop(args, pipe, device, train_data_loader, test_data_loader)
-            except Exception as e:
-                print(get_pipeline_parallel_rank(), e)
-            pipe.export_profiling_result(filename=trace_file)
-        elif args.profiling == 'pytorch_profiling':
-            with profiler.profile(profile_memory=True, use_cuda=args.use_cuda) as prof:
-                train_loop(args, pipe, device, train_data_loader, test_data_loader)
-            print(prof.key_averages().table())
-            prof.export_chrome_trace(trace_file)
-        else:
-            print("No recognized profiler?")
-            assert False
+    total_train_time = train_loop(args, pipe, device, train_data_loader, test_data_loader)
+    
     end_time = time.time()
     duration = end_time - start_time
-    print(get_pipeline_parallel_rank(), 'finished.', "total time:%s" % format_time(duration))
-    torch.cuda.empty_cache()
+    print(get_pipeline_parallel_rank(), 'finished.', "total time:%s" % format_time(duration), "total train time:%s" % format_time(total_train_time), "invalid rate:%.2f%%" % (pipe.get_invalid_rate() * 100))
     
 
 if __name__ == '__main__':

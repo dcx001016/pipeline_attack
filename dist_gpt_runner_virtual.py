@@ -98,7 +98,7 @@ def main():
     init_communicators(args)
 
     if args.wandb and get_pipeline_parallel_rank() == args.pipeline_group_size-1:
-        wandb.init(project=f"dist_lm_runner-same_magnitude-defense-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
+        wandb.init(project=f"dist_gpt_runner-same_magnitude-defense-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
                    name=f"forward_attack_rate:{args.forward_attack_rate}",
                    save_code=False)
         init_wandb_config(args)

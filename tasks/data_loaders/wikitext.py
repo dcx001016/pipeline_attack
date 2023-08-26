@@ -43,10 +43,16 @@ def wikitext_detokenize(string):
 def get_wikitext_train_data_loader(args, tokenizer, num_workers=0):
     
     if args.task_name == "wiki103":
-        data = load_dataset('wikitext', 'wikitext-103-raw-v1', split='train')
-        data = data[:162668]
+        if os.path.exists("datasets/train/wiki103"):
+            data = load_from_disk("datasets/train/wiki103")
+        else:
+            data = load_dataset('wikitext', 'wikitext-103-raw-v1', split='train')
+        # data = data[:162668]
     else:
-        data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+        if os.path.exists("datasets/train/wikitext"):
+            data = load_from_disk("datasets/train/wikitext")
+        else:
+            data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
     encodings = tokenizer("\n\n".join(
         [wikitext_detokenize(t) for t in data["text"]]
     ), return_tensors="pt")
@@ -99,9 +105,15 @@ def get_wikitext_train_data_loader(args, tokenizer, num_workers=0):
     
 def get_wikitext_test_data_loader(args, tokenizer, num_workers=0):
     if args.task_name == "wiki103":
-        data = load_dataset('wikitext', 'wikitext-103-raw-v1', split='test')
+        if os.path.exists("datasets/test/wiki103"):
+            data = load_from_disk("datasets/test/wiki103")
+        else:
+            data = load_dataset('wikitext', 'wikitext-103-raw-v1', split='test')
     else:
-        data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        if os.path.exists("datasets/test/wikitext"):
+            data = load_from_disk("datasets/test/wikitext")
+        else:
+            data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
     encodings = tokenizer("\n\n".join(
         [wikitext_detokenize(t) for t in data["text"]]
     ), return_tensors="pt")
