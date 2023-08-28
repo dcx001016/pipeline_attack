@@ -1,9 +1,9 @@
 ARGS="--model-name checkpoints/gpt2-medium \
 --tokenizer-name gpt2-medium \
 --load-pretrained-model true \
---task-name arxiv21 --n-epochs 5 --warmup-epochs 1 \
+--task-name openwebtext --n-epochs 5 --warmup-epochs 1 \
 --num-layers 12 --num-heads 16 --embedding-dim 1024 \
---num-iters 1000000000000000 --lr 5e-5 --seq-length 1024 --batch-size 4 --micro-batch-size 1 \
+--num-iters 10000 --lr 5e-5 --seq-length 1024 --batch-size 4 --micro-batch-size 1 \
 --optimizer AdamW \
 --forward-compress-method none \
 --forward-bits 4 \
@@ -17,7 +17,7 @@ ARGS="--model-name checkpoints/gpt2-medium \
 --pp-mode gpipe-skip_layer --profiling no-profiling --do-evaluation true \
 --forward-attack true --forward-attack-rate 0.5 \
 --backward-attack false --backward-attack-rate 0.3 \
---do-valid true --use-center-server true \
+--do-valid false --use-center-server true \
 --wandb false --write-xlsx true"
 
 (trap 'kill 0' SIGINT; \

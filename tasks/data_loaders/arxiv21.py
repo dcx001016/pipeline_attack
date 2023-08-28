@@ -58,6 +58,9 @@ def get_arxiv21_train_data_loader(args, tokenizer, num_workers=0):
                                                     drop_last=True,
                                                     pin_memory=True,
                                                     collate_fn=None)
+    if args.warmup_steps is None:
+        args.warmup_steps = len(train_data_loader)
+    args.total_steps = args.warmup_steps * args.n_epochs
     return train_data_loader
 
     

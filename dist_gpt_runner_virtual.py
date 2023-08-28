@@ -16,6 +16,7 @@ from utils.dist_test_utils import *
 from utils.common_utils import *
 from tasks.data_loaders.arxiv21 import *
 from tasks.data_loaders.wikitext import *
+from tasks.data_loaders.openwebtext import *
 from pipeline_parallel.dist_pp_utils import get_pp_module_virtual
 
 def train_loop(args, pipe, device, train_data_loader, test_data_loader):
@@ -126,13 +127,13 @@ def main():
     elif args.task_name == 'arxiv21':
         train_data_loader = get_arxiv21_train_data_loader(args, tokenizer)
         test_data_loader = get_arxiv21_test_data_loader(args, tokenizer)
+    elif args.task_name == 'openwebtext':
+        train_data_loader = get_openwebtext_train_data_loader(args, tokenizer)
+        test_data_loader = get_wikitext_test_data_loader(args, tokenizer)
     else:
         raise Exception('unknown task.')
     
-    if args.warmup_steps is None:
-        args.warmup_steps = len(train_data_loader)
-    args.num_iters = min(len(train_data_loader), args.num_iters)
-    args.total_steps = len(train_data_loader) * args.n_epochs
+    # args.num_iters = min(len(train_data_loader), args.num_iters)
 
     print("Running ", args.pp_mode)
 

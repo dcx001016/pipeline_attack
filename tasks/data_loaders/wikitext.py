@@ -3,6 +3,8 @@ import re
 import torch
 from datasets import Dataset
 from datasets import load_dataset, load_from_disk
+import pickle
+from transformers import BatchEncoding
 
 from communication.comm_utils import *
 
@@ -41,7 +43,6 @@ def wikitext_detokenize(string):
     return string
 
 def get_wikitext_train_data_loader(args, tokenizer, num_workers=0):
-    
     if args.task_name == "wiki103":
         if os.path.exists("datasets/train/wiki103"):
             data = load_from_disk("datasets/train/wiki103")
@@ -53,9 +54,17 @@ def get_wikitext_train_data_loader(args, tokenizer, num_workers=0):
             data = load_from_disk("datasets/train/wikitext")
         else:
             data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
-    encodings = tokenizer("\n\n".join(
-        [wikitext_detokenize(t) for t in data["text"]]
-    ), return_tensors="pt")
+
+    if os.path.exists(os.path.join("datasets/train", args.task_name, "tmp_data.pkl")):
+        encodings = BatchEncoding()
+        with open(os.path.join("datasets/train", args.task_name, "tmp_data.pkl"), 'rb') as f:
+            encodings = pickle.load(f)
+    else:
+        encodings = tokenizer("\n\n".join(
+            [wikitext_detokenize(t) for t in data["text"]]
+        ), return_tensors="pt")
+        with open(os.path.join("datasets/train", args.task_name, "tmp_data.pkl"), 'wb') as f:
+            pickle.dump(encodings, f)
     
     input_ids_list = []
     stride = args.seq_length
@@ -100,6 +109,9 @@ def get_wikitext_train_data_loader(args, tokenizer, num_workers=0):
                                                     pin_memory=True,
                                                     collate_fn=None)
     print("length of train dataset: ", len(train_data_loader.dataset))
+    if args.warmup_steps is None:
+        args.warmup_steps = len(train_data_loader)
+    args.total_steps = args.warmup_steps * args.n_epochs
     return train_data_loader
     
     
