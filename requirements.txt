@@ -1,0 +1,8 @@
+torch==2.0.1
+transformers==4.22.1
+datasets==2.2.2
+matplotlib==3.7.2
+cupy-cuda112==8.6.0
+numpy==1.23.5
+openpyxl==3.1.2
+wandb
