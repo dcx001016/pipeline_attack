@@ -16,7 +16,7 @@ def get_metric(args):
         metrics.append(metric)
         metric = datasets.load_metric('./metrics/f1')
         metrics.append(metric)
-    if args.task_name in {'wikitext', 'wiki103', 'arxiv21'}:
+    if args.task_name in {'wikitext', 'wiki103', 'arxiv21', 'openwebtext'}:
         metric = datasets.load_metric('./metrics/perplexity_custom')
         metrics.append(metric)
     return metrics
@@ -28,73 +28,6 @@ def _lm_pred_func(x, y):
     labels = y[:, 1:].contiguous()
     loss = loss_fct(logits.transpose(-1, -2), labels).mean(1).detach().cpu()
     return loss
-
-def writetoxlsx_lm(task_name, model, epoch, 
-                forward_attack, forward_attack_rate,
-                # distance,
-                # alpha,
-                # history_length, top_n,
-                do_valid,
-                # iters,
-                optimizer, pipeline_virtual_gpus,
-                perplexity, loss,
-                # tp, fp, tn, fn,
-                # invalid_rate
-                ):
-
-    file_name = "experiment_3*3.xlsx"
-    workbook = load_workbook(filename=file_name)
-
-    sheet = workbook.active
-
-    row_count = str(sheet.max_row + 1)
-    sheet["A" + row_count] = task_name
-    sheet["B" + row_count] = model
-    sheet["C" + row_count] = epoch
-    sheet["D" + row_count] = forward_attack
-    sheet["E" + row_count] = forward_attack_rate
-    sheet["F" + row_count] = do_valid
-    # sheet["G" + row_count] = history_length
-    # sheet["H" + row_count] = top_n
-    # sheet["G" + row_count] = iters
-    sheet["G" + row_count] = optimizer
-    sheet["H" + row_count] = pipeline_virtual_gpus
-    sheet["I" + row_count] = perplexity
-    sheet["J" + row_count] = loss
-    # sheet["J" + row_count] = tp
-    # sheet["K" + row_count] = fp
-    # sheet["L" + row_count] = tn
-    # sheet["M" + row_count] = fn
-    # sheet["L" + row_count] = invalid_rate
-    workbook.save(file_name)
-
-def writetoxlsx_bert(task_name, model, epoch, 
-                forward_attack, forward_attack_rate,
-                history_length, top_n,
-                iters,
-                optimizer, pipeline_virtual_gpus,
-                matthews_correlation, accuracy,
-                invalid_rate):
-
-    workbook = load_workbook(filename="experiment_deberta_same_magnitude_virtual_kv.xlsx")
-
-    sheet = workbook.active
-
-    row_count = str(sheet.max_row + 1)
-    sheet["A" + row_count] = task_name
-    sheet["B" + row_count] = model
-    sheet["C" + row_count] = epoch
-    sheet["D" + row_count] = forward_attack
-    sheet["E" + row_count] = forward_attack_rate
-    sheet["F" + row_count] = history_length
-    sheet["G" + row_count] = top_n
-    sheet["H" + row_count] = iters
-    sheet["I" + row_count] = optimizer
-    sheet["J" + row_count] = pipeline_virtual_gpus
-    sheet["K" + row_count] = accuracy
-    sheet["M" + row_count] = matthews_correlation
-    sheet["N" + row_count] = invalid_rate
-    workbook.save("experiment_deberta_same_magnitude_virtual_kv.xlsx")
 
 def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, epoch):
     pipeline.change_mode("eval")
@@ -115,28 +48,19 @@ def distributed_test_lm_iter_virtual(args, pipeline, device, test_data_loader, e
         print(result)
         pipeline.results.append(result)
         if epoch == args.n_epochs - 1:
+            args_data = {}
+            keys = ["pp_mode", "model_name", "task_name", "load_pretrained_model", "forward_attack", "forward_attack_rate", "backward_attack", "backward_attack_rate", "attack_type", "do_valid", "restart", "use_center_server"]
+            for k in keys:
+                args_data[k] = getattr(args, k)
             data = {
                 "pp_mode": args.pp_mode,
-                "args": vars(args),
+                "args": args_data,
                 "results": pipeline.results,
-                "epoch_metrics": pipeline.epoch_metrics,
-                "sample_error_times": pipeline.sample_error_times
+                "invalid rate": pipeline.get_invalid_rate(),
+                "losses": pipeline.losses,
+                "malicious_stages": pipeline.malicious_stages
             }
             save_result(data)
-        if args.write_xlsx and epoch == args.n_epochs - 1:
-            # tp, fp, tn, fn = calculate_metrics(pipeline.global_attack, pipeline.global_invalid)
-            writetoxlsx_lm(args.task_name, args.model_name, args.n_epochs,
-                        args.forward_attack, args.forward_attack_rate,
-                        args.do_valid,
-                        # args.distance,
-                        # args.alpha,
-                        # args.history_length, args.top_n,
-                        # args.num_iters,
-                        args.optimizer, args.pipeline_virtual_gpus,
-                        result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"],
-                        # tp, fp, tn, fn,
-                        # pipeline.get_invalid_rate()
-                        )
         if args.wandb and epoch == args.n_epochs - 1:
             wandb.config.result = result
     else:
@@ -160,14 +84,7 @@ def distributed_test_lm_iter(args, pipeline, device, test_data_loader, epoch):
             metric.name: metric.compute() for metric in metrics
         }
         print(result)
-        
-        if args.write_xlsx and epoch == args.n_epochs - 1:
-            if args.task_name in {'wikitext', 'wiki103', 'arxiv21'}:
-                writetoxlsx_lm(args.task_name, args.model_name, args.n_epochs,
-                            args.forward_attack, args.forward_attack_rate,
-                            args.backward_attack, args.backward_attack_rate,
-                            args.optimizer, args.pipeline_virtual_gpus,
-                            result["perplexity_custom"]["perplexity"], result["perplexity_custom"]["loss"])
+    
         if args.wandb and epoch == args.n_epochs - 1:
             wandb.config.result = result
     else:
@@ -198,14 +115,6 @@ def distributed_test_bert_iter_virtual(args, pipeline, device, test_data_loader,
             metric.name: metric.compute() for metric in metrics
         }
         print(result)
-        if args.write_xlsx and epoch == args.n_epochs - 1:
-            writetoxlsx_bert(args.task_name, args.model_name, args.n_epochs,
-                        args.forward_attack, args.forward_attack_rate,
-                        args.history_length, args.top_n,
-                        args.num_iters,
-                        args.optimizer, args.pipeline_virtual_gpus,
-                        result["matthews_correlation"]["matthews_correlation"], result["accuracy"]["accuracy"],
-                        pipeline.get_invalid_rate())
         if args.wandb and epoch == args.n_epochs - 1:
             wandb.config.result = result
     else:

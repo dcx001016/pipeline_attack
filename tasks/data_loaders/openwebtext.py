@@ -1,10 +1,7 @@
 import os
-import re
 import torch
 from torch.utils.data import IterableDataset, DataLoader
 from itertools import cycle, islice
-import random
-from datasets import Dataset
 from datasets import load_dataset, load_from_disk
 
 class ConcatFiles:
@@ -57,7 +54,7 @@ class StreamDataset(IterableDataset):
     
 def get_openwebtext_train_data_loader(args, tokenizer, num_workers=0):
     if os.path.exists("datasets/train/openwebtext"):
-            data = load_from_disk("datasets/train/openwebtext")
+        data = load_from_disk("datasets/train/openwebtext")
     else:
         data = load_dataset('stas/openwebtext-10k', split='train')
     
@@ -67,6 +64,7 @@ def get_openwebtext_train_data_loader(args, tokenizer, num_workers=0):
                                                     batch_size=args.batch_size,
                                                     shuffle=False,
                                                     num_workers=num_workers,
+                                                    drop_last=True,
                                                     pin_memory=True,
                                                     collate_fn=None)
     if args.warmup_steps is None:

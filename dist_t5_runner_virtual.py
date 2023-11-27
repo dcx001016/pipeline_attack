@@ -2,11 +2,10 @@ import argparse
 import time
 import random
 import torch
-import torch.autograd.profiler as profiler
 import numpy as np
 import wandb
 
-from modules.gpt_modules import GPTConfig
+from transformers import AutoConfig
 from modules.tokenizer import *
 from communication.comm_utils import *
 from utils.dist_args_utils import *
@@ -16,7 +15,7 @@ from utils.common_utils import *
 from tasks.data_loaders.arxiv21 import *
 from tasks.data_loaders.wikitext import *
 from tasks.data_loaders.openwebtext import *
-from pipeline_parallel.dist_pp_utils import get_pp_module_virtual
+from pipeline_parallel.dist_pp_utils import get_t5_pp_module_virtual
 
 def train_loop(args, pipe, device, train_data_loader, test_data_loader):
     total_train_time = 0
@@ -34,7 +33,7 @@ def train_loop(args, pipe, device, train_data_loader, test_data_loader):
 
 def main():
     start_time = time.time()
-    parser = argparse.ArgumentParser(description='Gpipe-GPT2')
+    parser = argparse.ArgumentParser(description='Gpipe-OPT')
     add_device_arguments(parser)
     add_model_arguments(parser)
     add_task_arguments(parser)
@@ -45,9 +44,9 @@ def main():
     add_mixed_precision_arguments(parser)
     add_attack_schema_arguments(parser)
 
-    parser.add_argument('--model-name', type=str, default='checkpoints/gpt2-medium', metavar='S',
+    parser.add_argument('--model-name', type=str, default='checkpoints/google/flan-t5-xl', metavar='S',
                         help='model name or path')
-    parser.add_argument('--tokenizer-name', type=str, default='gpt2-medium', metavar='S',
+    parser.add_argument('--tokenizer-name', type=str, default='checkpoints/google/flan-t5-xl', metavar='S',
                         help='tokenizer name or path')
     parser.add_argument('--task-name', type=str, default='wikitext', metavar='S',
                         help='task name')
@@ -78,8 +77,6 @@ def main():
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     np.random.seed(args.seed)
-    
-    config = GPTConfig.from_pretrained(args.model_name)
 
     if args.use_cuda:
         assert (torch.cuda.is_available())
@@ -92,21 +89,20 @@ def main():
     if not args.backward_attack:
         args.backward_attack_rate = 0
 
-    assert config.n_layer % args.pipeline_virtual_gpus == 0
-    args.num_layers = int(config.n_layer / args.pipeline_group_size)
     assert args.pipeline_virtual_gpus % args.pipeline_group_size == 0
     args.virtual_gpus = int(args.pipeline_virtual_gpus / args.pipeline_group_size)
+    assert args.num_layers % args.virtual_gpus == 0
     args.virtual_num_layers = int(args.num_layers / args.virtual_gpus)
 
     init_communicators(args)
 
     if args.wandb and get_pipeline_parallel_rank() == args.pipeline_group_size-1:
-        wandb.init(project=f"dist_gpt_runner-same_magnitude-defense-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
+        wandb.init(project=f"dist_t5_runner-same_magnitude-defense-{args.optimizer}-{args.task_name}-vgpus-{args.pipeline_virtual_gpus}", 
                    name=f"forward_attack_rate:{args.forward_attack_rate}",
                    save_code=False)
         init_wandb_config(args)
 
-    config = GPTConfig.from_pretrained(args.model_name)
+    config = AutoConfig.from_pretrained(args.model_name)
 
     tokenizer = build_tokenizer(args)
     tokenizer.model_max_length = args.seq_length
@@ -115,11 +111,7 @@ def main():
     config.eos_token_id = tokenizer.eos_token_id
     config.pad_token_id = tokenizer.pad_token_id
     if not args.dropout:
-        config.attn_pdrop = 0
-        config.embd_pdrop = 0
-        config.resid_pdrop = 0
-        config.summary_first_dropout = 0
-    
+        config.dropout_rate = 0
 
     if args.task_name in {'wikitext', 'wiki103'}:
         train_data_loader = get_wikitext_train_data_loader(args, tokenizer)
@@ -133,45 +125,10 @@ def main():
     else:
         raise Exception('unknown task.')
     
-    # args.num_iters = min(len(train_data_loader), args.num_iters)
 
     print("Running ", args.pp_mode)
 
-    pipe = get_pp_module_virtual(args, config, device)
-
-    if args.load_pretrained_model:
-        for i in range(len(pipe.virtual_gpus)):
-            if pipe.virtual_gpus[i].virtual_rank == 0:
-                pipe.virtual_gpus[i].model.model[0].load_state_dict(
-                    torch.load(f'{args.model_name}/pytorch_embs.pt')
-                )
-                for j in range(len(pipe.virtual_gpus[i].model.model) - 1):
-                    print(j)
-                    pipe.virtual_gpus[i].model.model[j + 1].load_state_dict(
-                        torch.load(f'{args.model_name}/pytorch_{j}.pt')
-                    )
-            elif pipe.virtual_gpus[i].virtual_rank == args.pipeline_virtual_gpus - 1:
-                _i = pipe.virtual_gpus[i].virtual_rank * args.virtual_num_layers
-                for j in range(len(pipe.virtual_gpus[i].model.model) - 1):
-                    print(j + _i)
-                    pipe.virtual_gpus[i].model.model[j].load_state_dict(
-                        torch.load(f'{args.model_name}/pytorch_{_i + j}.pt')
-                    )
-    
-
-                pipe.virtual_gpus[i].model.model[-1].load_state_dict(
-                    torch.load(f'{args.model_name}/pytorch_lm_head.pt')
-                )
-            else:
-                _i = pipe.virtual_gpus[i].virtual_rank * args.virtual_num_layers
-                for j in range(len(pipe.virtual_gpus[i].model.model)):
-                    print(j + _i)
-                    pipe.virtual_gpus[i].model.model[j].load_state_dict(
-                        torch.load(f'{args.model_name}/pytorch_{_i + j}.pt')
-                    )
-                
-
-
+    pipe = get_t5_pp_module_virtual(args, config, device)
 
     total_train_time = train_loop(args, pipe, device, train_data_loader, test_data_loader)
     

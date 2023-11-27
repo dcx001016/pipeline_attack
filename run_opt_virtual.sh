@@ -2,20 +2,16 @@ ARGS="--model-name checkpoints/facebook/opt-350m \
 --tokenizer-name checkpoints/facebook/opt-350m \
 --load-pretrained-model true \
 --task-name wikitext --n-epochs 5 --warmup-epochs 1 \
---num-layers 12 --num-heads 16 --embedding-dim 1024 \
---num-iters 1000000000000000 --lr 5e-5 --seq-length 1024 --batch-size 4 --micro-batch-size 1 \
---optimizer AdamW \
---forward-compress-method none \
---forward-bits 4 \
---backward-compress-method none \
---backward-bits 8 \
+--embedding-dim 1024 \
+--num-iters 2500 --lr 5e-5 --seq-length 1024 --batch-size 4 --micro-batch-size 1 \
 --dist-url tcp://127.0.0.1:9034 \
 --dropout false \
 --world-size 2 --pipeline-group-size 2 --pipeline-virtual-gpus 6 \
---pp-mode gpipe-skip_layer --profiling no-profiling --do-evaluation true \
+--attack-type reverse \
+--pp-mode gpipe-skip_layer --do-evaluation true \
 --forward-attack true --forward-attack-rate 0.5 \
---backward-attack false --backward-attack-rate 0.3 \
---do-valid true --use-center-server true \
+--backward-attack false --backward-attack-rate 0.7 \
+--do-valid true --use-center-server true --restart true \
 --wandb false --write-xlsx true"
 
 (trap 'kill 0' SIGINT; \

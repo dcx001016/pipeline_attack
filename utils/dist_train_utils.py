@@ -15,6 +15,8 @@ def distributed_train_lm_iter_virtual(args, pipeline, device, train_data_loader)
     if get_pipeline_parallel_rank() == 0:
         total_time = 0
         for i, (data_previous, data, data_next) in enumerate(previous_and_next(train_data_loader)):
+            if pipeline.global_step >= args.total_steps:
+                break
             input_ids = data['text'].to(device)
             data_ids = (data_previous['idx'] if data_previous is not None else None, 
                         data['idx'], data_next['idx'] if data_next is not None else None, )
@@ -28,6 +30,8 @@ def distributed_train_lm_iter_virtual(args, pipeline, device, train_data_loader)
               " iterations, averaged (exclude the first iter) run time:", averaged_time)
     elif get_pipeline_parallel_rank()  == args.pipeline_group_size - 1:
         for i, (data_previous, data, data_next) in enumerate(previous_and_next(train_data_loader)):
+            if pipeline.global_step >= args.total_steps:
+                break
             input_ids = data['text'].to(device)
             labels = data['text'].to(device) # labels are inputs
             data_ids = (data_previous['idx'] if data_previous is not None else None, 
@@ -40,11 +44,13 @@ def distributed_train_lm_iter_virtual(args, pipeline, device, train_data_loader)
         #     wandb_activation_gradient(activation, grad)
     else:
         for i, (data_previous, data, data_next) in enumerate(previous_and_next(train_data_loader)):
+            if pipeline.global_step >= args.total_steps:
+                break
             data_ids = (data_previous['idx'] if data_previous is not None else None, 
                         data['idx'], data_next['idx'] if data_next is not None else None, )
             pipeline.sgd_iter(None, None, data_ids, iter=i)
             i += 1
-            if i >= args.num_iters:
+            if i >= args.num_iters-1:
                     break
 
 def distributed_train_lm_iter(args, pipeline, device, train_data_loader):

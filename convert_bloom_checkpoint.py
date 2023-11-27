@@ -6,7 +6,7 @@ from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Convert HF checkpoints')
-    parser.add_argument('--model-name', type=str, default='bigscience/bloom-7b1', 
+    parser.add_argument('--model-name', type=str, default='bigscience/bloom-560m', 
                         help='model-name')
     parser.add_argument('--save-dir', type=str, default='checkpoints', 
                         help='model-name')

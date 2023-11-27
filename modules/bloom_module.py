@@ -176,7 +176,7 @@ class GPTBlock(_BloomBlock):
         attention_mask = mask
             
         # alibi = build_alibi_tensor(current_sequence_length, self.n_head, hidden_states.dtype)
-        alibi = self._build_alibi_tensor(attention_mask, self.n_head, hidden_states.dtype, hidden_states.device)
+        alibi = self._build_alibi_tensor(attention_mask, self.num_heads, hidden_states.dtype, hidden_states.device)
         input_shape = hidden_states.size()[:-1]
         causal_mask = self._prepare_attn_mask(attention_mask, input_shape, hidden_states, past_key_values_length)
             
@@ -188,6 +188,8 @@ class GPTBlock(_BloomBlock):
         else:
             residual = hidden_states
 
+        causal_mask = causal_mask.bool()
+        
         # Self attention.
         attn_outputs = self.self_attention(
             layernorm_output,
@@ -202,7 +204,7 @@ class GPTBlock(_BloomBlock):
         present = attn_outputs[1]
         # permute to be compatible
         # (bs, seq, nhead, size) => (bs, nhead, seq, size)
-        present = (present[0].permute(0, 2, 1, 3), present[1].permute(0, 2, 1, 3))
+        # present = (present[0].permute(0, 2, 1, 3), present[1].permute(0, 2, 1, 3))
         
         layernorm_output = self.post_attention_layernorm(attention_output)
 

@@ -6,7 +6,7 @@ from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Convert HF checkpoints')
-    parser.add_argument('--model-name', type=str, default='facebook/opt-350m', 
+    parser.add_argument('--model-name', type=str, default='facebook/opt-1.3b', 
                         help='model-name')
     parser.add_argument('--save-dir', type=str, default='checkpoints', 
                         help='model-name')
@@ -40,6 +40,10 @@ if __name__ == '__main__':
     item['lm_head.weight'] = model.state_dict()['lm_head.weight']
     if 'model.decoder.project_out.weight' in model.state_dict():
         item['project_out.weight'] = model.state_dict()['model.decoder.project_out.weight']
+    if 'model.decoder.final_layer_norm.weight' in model.state_dict():
+        item['final_layer_norm.weight'] = model.state_dict()['model.decoder.final_layer_norm.weight']
+    if 'model.decoder.final_layer_norm.bias' in model.state_dict():
+        item['final_layer_norm.bias'] = model.state_dict()['model.decoder.final_layer_norm.bias']
     # item['final_layer_norm.weight'] = model.state_dict()['model.decoder.final_layer_norm.weight']
     # item['final_layer_norm.bias'] = model.state_dict()['model.decoder.final_layer_norm.bias']
     torch.save(item, os.path.join(save_path, 'pytorch_lm_head.pt'))

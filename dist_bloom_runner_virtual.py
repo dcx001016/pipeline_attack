@@ -6,7 +6,6 @@ import torch.autograd.profiler as profiler
 import numpy as np
 import wandb
 
-from attack.attack import *
 from transformers import AutoConfig
 from modules.tokenizer import *
 from communication.comm_utils import *
@@ -91,9 +90,12 @@ def main():
     if not args.backward_attack:
         args.backward_attack_rate = 0
 
+    config = AutoConfig.from_pretrained(args.model_name)
+        
+    assert config.n_layer % args.pipeline_virtual_gpus == 0
+    args.num_layers = int(config.n_layer / args.pipeline_group_size)
     assert args.pipeline_virtual_gpus % args.pipeline_group_size == 0
     args.virtual_gpus = int(args.pipeline_virtual_gpus / args.pipeline_group_size)
-    assert args.num_layers % args.virtual_gpus == 0
     args.virtual_num_layers = int(args.num_layers / args.virtual_gpus)
 
     init_communicators(args)
@@ -103,8 +105,6 @@ def main():
                    name=f"forward_attack_rate:{args.forward_attack_rate}",
                    save_code=False)
         init_wandb_config(args)
-
-    config = AutoConfig.from_pretrained(args.model_name)
 
     tokenizer = build_tokenizer(args)
     tokenizer.model_max_length = args.seq_length

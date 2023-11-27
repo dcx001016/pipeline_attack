@@ -1,23 +1,17 @@
-ARGS="--model-name checkpoints/gpt2-medium \
---tokenizer-name gpt2-medium \
---load-pretrained-model true \
---task-name openwebtext --n-epochs 5 --warmup-epochs 1 \
---num-layers 12 --num-heads 16 --embedding-dim 1024 \
---num-iters 10000 --lr 5e-5 --seq-length 1024 --batch-size 4 --micro-batch-size 1 \
---optimizer AdamW \
---forward-compress-method none \
---forward-bits 4 \
---backward-compress-method none \
---backward-bits 8 \
---dist-url tcp://127.0.0.1:9033 \
---alpha 1.0 --dropout false \
+ARGS="--model-name checkpoints/gpt2-xl \
+--tokenizer-name gpt2-xl \
+--load-pretrained-model false \
+--task-name arxiv21 --n-epochs 5 --warmup-epochs 1 \
+--embedding-dim 1600 \
+--num-iters 2500 --lr 5e-5 --seq-length 1024 --batch-size 4 --micro-batch-size 1 \
+--dist-url tcp://127.0.0.1:9034 \
+--dropout false \
 --world-size 2 --pipeline-group-size 2 --pipeline-virtual-gpus 6 \
---history-length 100 --top-n 11 \
---distance cos \
---pp-mode gpipe-skip_layer --profiling no-profiling --do-evaluation true \
+--attack-type reverse \
+--pp-mode gpipe-skip_layer --do-evaluation true \
 --forward-attack true --forward-attack-rate 0.5 \
---backward-attack false --backward-attack-rate 0.3 \
---do-valid false --use-center-server true \
+--backward-attack false --backward-attack-rate 0.7 \
+--do-valid true --use-center-server true --restart false \
 --wandb false --write-xlsx true"
 
 (trap 'kill 0' SIGINT; \

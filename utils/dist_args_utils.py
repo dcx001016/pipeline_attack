@@ -121,10 +121,10 @@ def add_parallel_schema_arguments(parser):
 def add_attack_schema_arguments(parser):
     parser.add_argument('--forward-attack', 
                         type=lambda x: x.lower()=='true', default=True, metavar='S',
-                        help='load pretrained model or not.')
+                        help='forward attack or not.')
     parser.add_argument('--backward-attack', 
                         type=lambda x: x.lower()=='true', default=False, metavar='S',
-                        help='load pretrained model or not.')
+                        help='backward attack or not.')
     parser.add_argument('--forward-attack-rate', type=float, default=0.5, metavar='N',
                         help='-')
     parser.add_argument('--backward-attack-rate', type=float, default=0, metavar='N',
@@ -133,12 +133,17 @@ def add_attack_schema_arguments(parser):
                         help='-')
     parser.add_argument('--top-n', type=int, default=1, metavar='N',
                         help='-')
+    parser.add_argument('--attack-type', type=str, default='reverse', metavar='N',
+                        help='-')
     parser.add_argument('--do-valid', 
                         type=lambda x: x.lower()=='true', default=True, metavar='S',
-                        help='load pretrained model or not.')
+                        help='defense or not.')
     parser.add_argument('--use-center-server', 
                         type=lambda x: x.lower()=='true', default=True, metavar='S',
-                        help='load pretrained model or not.')
+                        help='use center server or not.')
+    parser.add_argument('--restart', 
+                        type=lambda x: x.lower()=='true', default=False, metavar='S',
+                        help='restart or not.')
     
 def get_model_arguments_str(args):
     return '_l' + str(args.seq_length) + '_m' + str(args.embedding_dim)

@@ -3,8 +3,6 @@ import re
 import torch
 from datasets import Dataset
 from datasets import load_dataset, load_from_disk
-import pickle
-from transformers import BatchEncoding
 
 from communication.comm_utils import *
 
@@ -55,16 +53,9 @@ def get_wikitext_train_data_loader(args, tokenizer, num_workers=0):
         else:
             data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
 
-    if os.path.exists(os.path.join("datasets/train", args.task_name, "tmp_data.pkl")):
-        encodings = BatchEncoding()
-        with open(os.path.join("datasets/train", args.task_name, "tmp_data.pkl"), 'rb') as f:
-            encodings = pickle.load(f)
-    else:
-        encodings = tokenizer("\n\n".join(
-            [wikitext_detokenize(t) for t in data["text"]]
-        ), return_tensors="pt")
-        with open(os.path.join("datasets/train", args.task_name, "tmp_data.pkl"), 'wb') as f:
-            pickle.dump(encodings, f)
+    encodings = tokenizer("\n\n".join(
+        [wikitext_detokenize(t) for t in data["text"]]
+    ), return_tensors="pt")
     
     input_ids_list = []
     stride = args.seq_length
@@ -74,16 +65,6 @@ def get_wikitext_train_data_loader(args, tokenizer, num_workers=0):
         input_ids = encodings.input_ids[:, begin_loc:end_loc]
         input_ids_list.append(input_ids)
     input_ids = torch.cat(input_ids_list, 0)
-    
-    use_dp = (args.world_size != args.pipeline_group_size)
-    if use_dp:
-        dp_rank = get_data_parallel_rank()
-        n_samples = len(input_ids)
-        n_samples_per_rank = n_samples // args.data_group_size
-        i_begin, i_end = dp_rank * n_samples_per_rank, (dp_rank+1) * n_samples_per_rank
-        input_ids = input_ids[i_begin: i_end]
-    else:
-        dp_rank = 0
     
     train_set = Dataset.from_dict({
         'input_ids': input_ids,
@@ -98,7 +79,7 @@ def get_wikitext_train_data_loader(args, tokenizer, num_workers=0):
         ])
     
     generator = torch.Generator()
-    generator.manual_seed(args.seed + dp_rank)
+    generator.manual_seed(args.seed)
     train_sampler = torch.utils.data.RandomSampler(train_set, generator=generator)
     train_data_loader = torch.utils.data.DataLoader(train_set,
                                                     batch_size=args.batch_size,

@@ -14,8 +14,14 @@ def calculate_metrics(true_labels, predicted_labels):
     fn = sum([1 for t, p in zip(true_labels, predicted_labels) if t == 1 and p == 0]) / labels_length if labels_length else 0
     return tp, fp, tn, fn
 
+def save_loss(data: list, filename):
+    with open(filename, "w") as f:
+        f.write('Index\tValue\n')
+        for i, d in enumerate(data):
+            f.write(f'{i}\t{d}\n')
+
 def save_result(data):
-    filename = "result2/result_%s.json" % datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+    filename = "result/result_%s.json" % datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
     with open(filename, "w") as f:
         json.dump(data, f)
 
