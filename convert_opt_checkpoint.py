@@ -6,7 +6,7 @@ from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Convert HF checkpoints')
-    parser.add_argument('--model-name', type=str, default='facebook/opt-1.3b', 
+    parser.add_argument('--model-name', type=str, default='facebook/opt-2.7b', 
                         help='model-name')
     parser.add_argument('--save-dir', type=str, default='checkpoints', 
                         help='model-name')

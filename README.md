@@ -1,6 +1,7 @@
 # pipeline_attack
 
-This is dcx's attack code against large model pipeline training.
+Welcome to the repository for the paper titled "Position: Exploring the Robustness of Pipeline-Parallelism-Based
+Decentralized Training".
 
 ## Setup:
 
